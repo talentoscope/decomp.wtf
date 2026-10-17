@@ -157,7 +157,7 @@ def run(args) -> int:
     try:
         uvicorn.Server(uvicorn.Config(app, log_level="warning")).run(sockets=[sock])
     finally:
-        manager.stop()
+        manager.shutdown()
         manager.on_stop()
     return 0
 

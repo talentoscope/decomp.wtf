@@ -1019,7 +1019,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
             return bad
 
         def bye():
-            manager.stop()
+            manager.shutdown()
             manager.on_stop()
             time.sleep(0.5)
             os._exit(0)
@@ -1261,8 +1261,8 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
 
     manager.on_stop = shutdown_rooms
 
-    def before_restart() -> None:  # what quitting does: helpers stop now and resume in the new version
-        manager.stop()
+    def before_restart() -> None:  # a new version starts without the old helpers
+        manager.shutdown()
         manager.on_stop()
     updater = updates.Updater(before_restart, port, secret)
     threading.Thread(target=watch_updates, daemon=True, name="updates").start()

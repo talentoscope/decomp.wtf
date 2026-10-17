@@ -111,6 +111,21 @@ def test_gemini_cli_helpers_carry_on_as_antigravity():
     assert "gemini" not in agents.KINDS and agents.KINDS["antigravity"].command == "agy"
 
 
+def test_shutdown_removes_helpers_and_clears_resume_state():
+    manager = agents.Manager.__new__(agents.Manager)
+    sessions = [agents.Session("a", "api", "API", "demo", "a", {}),
+                agents.Session("b", "claude", "Claude", "demo", "b", {})]
+    manager.sessions = {s.id: s for s in sessions}
+    saved = []
+    manager.persist = lambda running: saved.append(running)
+
+    manager.shutdown()
+
+    assert manager.sessions == {}
+    assert all(s.stop.is_set() and s.state == "stopped" for s in sessions)
+    assert saved == [[]]
+
+
 def test_connect_antigravity(tmp_path, monkeypatch):
     monkeypatch.setattr(connect, "_which", lambda cmd: f"/bin/{cmd}")
     monkeypatch.setattr(connect, "bridge_command", lambda: ["/usr/bin/python3", "-m", "decompnet.app.cli", "mcp"])

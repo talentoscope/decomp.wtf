@@ -611,7 +611,7 @@ class Manager:
                 for s in self.sessions.values() if s.state in ("starting", "working", "waiting") and not s.stop.is_set()]
 
     def stop(self, sid: str | None = None) -> None:
-        """Stop one helper (for good) or all of them (the app is quitting: they resume next time)."""
+        """Stop one helper (for good) or all of them."""
         for s in list(self.sessions.values()):
             if sid in (None, s.id):
                 s.stop.set()
@@ -621,6 +621,12 @@ class Manager:
                     s.state = "stopped"
         if sid is not None:
             self.persist(self.running())
+
+    def shutdown(self) -> None:
+        """Stop and remove every helper, and don't resume them when the app starts again."""
+        self.stop()
+        self.sessions.clear()
+        self.persist([])
 
     def remove(self, sid: str) -> None:
         self.stop(sid)

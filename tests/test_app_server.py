@@ -184,11 +184,14 @@ def test_helpers_are_remembered_to_resume(app):
     manager.persist = lambda running: seen.append([r["kind"] for r in running])
     (sid,) = manager.start("api", slug, 1, {"base_url": "http://127.0.0.1:9/v1", "model": "m"})
     assert seen[-1] == ["api"]
-    manager.stop()  # the app quitting: nothing is forgotten, they resume next time
-    assert seen[-1] == ["api"]
-    manager.stop(sid)  # you stopping it: forgotten
+    manager.stop(sid)
     assert seen[-1] == []
     manager.remove(sid)
+
+    (sid,) = manager.start("api", slug, 1, {"base_url": "http://127.0.0.1:9/v1", "model": "m"})
+    assert seen[-1] == ["api"]
+    manager.shutdown()
+    assert seen[-1] == [] and manager.sessions == {}
 
 
 def test_an_older_app_still_running_after_an_upgrade_is_replaced(tmp_path):
