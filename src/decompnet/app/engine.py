@@ -18,19 +18,15 @@ import json
 import logging
 import re
 import secrets
-import shutil
 import struct
 import threading
 import time
 from pathlib import Path
 
-import capstone
-
 from .. import scoring, seeds, similarity, toolchains
-from ..compiler import CompileResult
 from ..elfobj import FunctionObj
 from ..network import Agent, Network, NetworkError, _hash_token
-from ..rom import c64, detect, match, split
+from ..rom import detect, match, split
 from ..rom.symbols import AUTO_NAME, IDENT, Symbol, SymbolTable
 
 DEFAULT_TOOLCHAIN = {"KMC": "gcc-2.7.2-kmc", "IDO": "ido-7.1", "PSYQ": "gcc-2.7.2-psx", "EEGCC": "ee-gcc-2.96",
@@ -40,7 +36,7 @@ DEFAULT_TOOLCHAIN = {"KMC": "gcc-2.7.2-kmc", "IDO": "ido-7.1", "PSYQ": "gcc-2.7.
 # of project as decomp.dev's, linked file by file as it's finished; N64: tested on real games, rebuilt byte for byte).
 # beta: works and is tested on homemade games, less so on real ones yet.
 PLATFORM_STATUS = {"gc": "recommended", "wii": "recommended", "n64": "recommended",
-                   "psx": "beta", "ps2": "beta", "gba": "beta", "nds": "beta", "c64": "beta"}
+                   "psx": "beta", "ps2": "beta", "gba": "beta", "nds": "beta"}
 COMPILERS = {
     "gcc-2.7.2-kmc": "many third-party N64 games",
     "ido-7.1": "most later first-party N64 games",
@@ -49,11 +45,10 @@ COMPILERS = {
     "gcc-2.8.1-psx": "later PlayStation games",
     "ee-gcc-2.96": "PlayStation 2 games (Sony's EE GCC)",
     "agbcc": "Game Boy Advance games (pret's agbcc, GCC 2.95)",
-    "cc65": "Commodore 64 games (C compiled with cc65)",
 }
 SHORT_NAMES = {"gcc-2.7.2-kmc": "KMC GCC 2.7.2", "ido-7.1": "IDO 7.1", "ido-5.3": "IDO 5.3",
                "gcc-2.7.2-psx": "GCC 2.7.2 (PS1)", "gcc-2.8.1-psx": "GCC 2.8.1 (PS1)", "ee-gcc-2.96": "EE-GCC 2.96",
-               "agbcc": "agbcc", "cc65": "cc65"}
+               "agbcc": "agbcc"}
 # CodeWarrior versions in the `mwcc` pack (GameCube, Wii) and the `mwccarm` pack (DS), for games started from scratch.
 MW_VERSIONS = {
     "gc": ["GC/1.0", "GC/1.1", "GC/1.1p1", "GC/1.2.5", "GC/1.2.5n", "GC/1.3", "GC/1.3.2", "GC/1.3.2r", "GC/2.0",
@@ -78,10 +73,9 @@ TOOLS = {
 # Functions this small are handed out in batches (claim_function count): agents match most on the first try.
 BATCH_INSNS = 48
 PLATFORM_COMPILERS = {"n64": ["gcc-2.7.2-kmc", "ido-7.1", "ido-5.3"], "psx": ["gcc-2.7.2-psx", "gcc-2.8.1-psx"],
-                      "ps2": ["ee-gcc-2.96"], "gba": ["agbcc"], "c64": ["cc65"]}
-C64_ASM = "6502-asm"
-_AUTO_TOKEN = re.compile(r"\b(?:func|D|B|jtbl|RO|STR|FLT|DBL)_[0-9A-F]{4}(?:[0-9A-F]{4})?\b")
-_ADDRESS = re.compile(r"^(?:0x)?([0-9A-Fa-f]{1,8})$")
+                      "ps2": ["ee-gcc-2.96"], "gba": ["agbcc"]}
+_AUTO_TOKEN = re.compile(r"\b(?:func|D|B|jtbl|RO|STR|FLT|DBL)_[0-9A-F]{8}\b")
+_ADDRESS = re.compile(r"^(?:0x)?([0-9A-Fa-f]{8})$")
 
 GP_NOTE = """
 /* This game keeps small globals (8 bytes or less) in $gp-relative small data. Declare those here WITHOUT
@@ -310,8 +304,6 @@ class RomNetwork(Network):
         platform = self.cfg(proj).get("platform")
         if platform == "gba":
             return FunctionObj(fn["name"], "thumb", False, fn["target"], [])
-        if platform == "c64":
-            return FunctionObj(fn["name"], "mos6502", False, fn["target"], [])
         return match.canonical_target(self._rom_target(fn), self.symbols(proj["id"]))
 
     def _evaluate(self, fn, proj, obj: bytes):
@@ -324,31 +316,8 @@ class RomNetwork(Network):
             res = match_arm.link(obj, fn["name"], match_arm.ArmTarget(fn["name"], fn["vram"], fn["target"]),
                                  self.symbols(proj["id"]), self.reader(proj))
             return res.candidate, res.exact if res.candidate is not None else None, res.problems
-        if platform == "c64":
-            return FunctionObj(fn["name"], "mos6502", False, obj, []), None, []
         res = match.link(obj, fn["name"], self._rom_target(fn), self.symbols(proj["id"]), self.reader(proj))
         return res.candidate, res.exact if res.candidate is not None else None, res.problems
-
-    def _compile(self, proj, header: str, source: str):
-        if self.cfg(proj).get("platform") == "c64":
-            return CompileResult(True, b"", "")
-        return super()._compile(proj, header, source)
-
-    def _compile_function(self, fn, proj, header: str, source: str):
-        if self.cfg(proj).get("platform") == "c64":
-            try:
-                if self.cfg(proj)["compiler"]["toolchain"] == "cc65" and "{" not in source:
-                    raise ValueError("This project matches C compiled with cc65: write a C function, not assembly. "
-                                     "(Switch the project's compiler to 6510 assembly in Settings to match assembly.)")
-                if "{" in source or "#include" in source:
-                    code = c64.compile_c(source, header, fn["name"], fn["vram"],
-                                         {sym.name: sym.address for sym in self.symbols(proj["id"]).by_name.values()})
-                else:
-                    code = c64.assemble(source, fn["vram"])
-                return CompileResult(True, code, "")
-            except ValueError as e:
-                return CompileResult(False, None, str(e))
-        return super()._compile_function(fn, proj, header, source)
 
     def _twin_lines(self, proj, fn) -> list[str]:
         """For a brief: the matched function with the same code, and its C with this one's names."""
@@ -368,7 +337,7 @@ class RomNetwork(Network):
     def rename_tokens(self, proj, text: str) -> str:
         """Show automatic names under their current names (func_80001234 -> deflate)."""
         syms = self.symbols(proj["id"])
-        return _AUTO_TOKEN.sub(lambda m: syms.label(int(m.group(0).rsplit("_", 1)[-1], 16)), text)
+        return _AUTO_TOKEN.sub(lambda m: syms.label(int(m.group(0)[-8:], 16)), text)
 
     def _asm_text(self, fn, proj) -> str:
         if not self.is_rom(proj):
@@ -383,8 +352,6 @@ class RomNetwork(Network):
         as a target. Returns the slug."""
         if not confirmed:
             raise NetworkError("confirm that this is your own legally obtained copy of the game")
-        if isinstance(data, Path) and data.is_dir():
-            return self.import_c64_folder(data, confirmed=True, name=name, toolchain=toolchain, log=log)
         project_file = self._community_layout(data, name)
         if project_file is not None:  # a dtk-template or ds-decomp project, worked on like a fork
             compiler = toolchain if toolchain and toolchain.startswith(("GC/", "Wii/", "DS/")) else None
@@ -395,10 +362,6 @@ class RomNetwork(Network):
             if json.loads(p["config"]).get("rom", {}).get("sha1") == info["sha1"]:
                 log(f"already imported as {p['slug']}")
                 return p["slug"]
-        c64_functions = c64.split(rom, log=log) if picked.platform == "c64" else None
-        if c64_functions is not None and not c64_functions:
-            raise NetworkError("couldn't find reachable 6510 code in this program; its entry point may be data or "
-                               "require indirect control flow")
         base = _slugify(info["title"])
         slug, n = base, 2
         while self.store.one("SELECT 1 FROM projects WHERE slug=?", slug) or (self.workspace / slug).exists():
@@ -411,8 +374,6 @@ class RomNetwork(Network):
             f"{info['region']}), {size}, looks built with {info['compiler_guess']}")
         if picked.platform == "gba":
             return self._import_gba(picked, slug, workdir, toolchain, flags, log)
-        if picked.platform == "c64":
-            return self._import_c64(picked, slug, workdir, c64_functions, toolchain, log)
         if picked.overlays:
             log(f"{len(picked.overlays)} overlay{'s' if len(picked.overlays) != 1 else ''} on the disc: "
                 + ", ".join(f"{o[0]} at 0x{o[2]:08X}" for o in picked.overlays[:6]) + (", ..." if len(picked.overlays) > 6 else ""))
@@ -478,163 +439,6 @@ class RomNetwork(Network):
                                                   None, "basic types", now, ""))
             self._event(db, pid, None, "import", f"{len(res.functions)} functions from {info['title']}")
         log(f"ready: {len(res.functions)} functions to decompile")
-        return slug
-
-    def _import_c64(self, picked, slug: str, workdir: Path, functions: list[c64.C64Function],
-                    toolchain: str | None, log) -> str:
-        """C64 programs are judged as 6510 assembly, or as C compiled with cc65."""
-        program = picked.data
-        (workdir / picked.filename).write_bytes(program)
-        base = int.from_bytes(program[:2], "little")
-        info = picked.info
-        rom = {**info, "file": picked.filename, "program": picked.filename}
-        return self._store_c64(slug, workdir, info["title"], info["container"], rom, base, len(program),
-                               [("rom", functions)], [], log, toolchain)
-
-    def import_c64_folder(self, folder: Path, *, confirmed: bool = False, name: str = "",
-                          toolchain: str | None = None, log=print) -> str:
-        """A folder of programs (for example PRGs extracted from a tape with TAPClean): every one that holds
-        reachable 6510 code becomes part of one project, and the rest are skipped."""
-        if not confirmed:
-            raise NetworkError("confirm that this is your own legally obtained copy of the game")
-        files = sorted((p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in c64.EXTENSIONS),
-                       key=lambda p: str(p.relative_to(folder)).lower())
-        if not files:
-            raise NetworkError("there are no C64 programs (.prg, .d64, .t64 or .crt) in that folder. For a tape image, "
-                               "extract the PRGs first with TAPClean or TAPClean FE.")
-        loaded = []
-        for path in files:
-            try:
-                program, info = c64.read_program(path.read_bytes(), path.name)
-            except (c64.RomError, OSError) as e:
-                log(f"skipped {path.name}: {e}")
-                continue
-            loaded.append((path, program, info))
-        # a call or jump may leave its own block for another one, so those targets become entries there
-        outside: set[int] = set()
-        splits = []
-        for _, program, _ in loaded:
-            reached: set[int] = set()
-            splits.append(c64.split(program, outside=reached))
-            outside |= reached
-        tried: list[set[int]] = [set() for _ in loaded]
-        for _ in range(8):
-            changed = False
-            for i, (path, program, info) in enumerate(loaded):
-                base = info["load_address"]
-                extra = sorted(a for a in outside if base <= a < base + len(program) - 2 and a not in tried[i])
-                if not extra:
-                    continue
-                tried[i].update(extra)
-                reached = set()
-                again = c64.split(program, entries=[c64.entrypoint(program[2:], base), *extra], outside=reached)
-                outside |= reached
-                if {f.address for f in again} != {f.address for f in splits[i]}:
-                    log(f"{path.name}: {len(again) - len(splits[i])} more functions reached from other programs")
-                    splits[i], changed = again, True
-            if not changed:
-                break
-        found, seen = [], set()
-        for (path, program, info), functions in zip(loaded, splits):
-            if not functions:
-                log(f"skipped {path.name}: no reachable 6510 code (data, or a loader that unpacks itself)")
-                continue
-            # tape dumps often repeat a file (or a routine inside one): keep only the first copy
-            fresh = [f for f in functions if (f.address, f.code) not in seen]
-            if not fresh:
-                log(f"skipped {path.name}: duplicate of an earlier program")
-                continue
-            if len(fresh) < len(functions):
-                log(f"{path.name}: ignoring {len(functions) - len(fresh)} functions already seen in earlier programs")
-            seen.update((f.address, f.code) for f in fresh)
-            functions = fresh
-            log(f"{path.name}: {len(functions)} functions, load address ${info['load_address']:04X}")
-            found.append((path, program, info, functions))
-        if not found:
-            raise NetworkError("none of the programs in that folder has reachable 6510 code; they may be data, or "
-                               "need indirect control flow followed by hand")
-        sha1 = hashlib.sha1("".join(info["sha1"] for _, _, info, _ in found).encode()).hexdigest()
-        for p in self.store.all("SELECT slug, config FROM projects"):
-            if json.loads(p["config"]).get("rom", {}).get("sha1") == sha1:
-                log(f"already imported as {p['slug']}")
-                return p["slug"]
-        title = name or folder.name or "C64 programs"
-        base_slug = _slugify(title)
-        slug, n = base_slug, 2
-        while self.store.one("SELECT 1 FROM projects WHERE slug=?", slug) or (self.workspace / slug).exists():
-            slug, n = f"{base_slug}-{n}", n + 1
-        workdir = self.workspace / slug
-        (workdir / "prg").mkdir(parents=True)
-        entries, programs, used = [], [], set()
-        for index, (path, program, info, functions) in enumerate(found, 1):
-            stored = f"prg/{index:03d}-{_slugify(path.stem)}.prg"
-            (workdir / stored).write_bytes(program)
-            unit = Path(stored).name
-            renamed = []
-            for fn in functions:
-                name_, k = fn.name, 2
-                while name_ in used:
-                    name_, k = f"{fn.name}_{k}", k + 1
-                used.add(name_)
-                renamed.append(c64.C64Function(name_, fn.address, fn.code, fn.asm, fn.n_insns, fn.rom_offset))
-            entries.append((unit, renamed))
-            programs.append({"unit": unit, "file": stored, "source": path.name, "load_address": info["load_address"]})
-        known: dict[int, tuple[str, str]] = {}
-        for unit, renamed in entries:
-            for fn in renamed:
-                known.setdefault(fn.address, (fn.name, unit))
-        entries = [(unit, [c64.C64Function(fn.name, fn.address, fn.code, c64.annotate(fn.asm, known, unit),
-                                           fn.n_insns, fn.rom_offset) for fn in renamed])
-                   for unit, renamed in entries]
-        first = found[0]
-        rom = {"title": title, "game_code": "", "region": "", "size": sum(len(p) - 2 for _, p, _, _ in found),
-               "sha1": sha1, "byte_order": "little", "compiler_guess": "CC65", "platform": "c64",
-               "container": "PRG folder", "file": programs[0]["file"], "program": programs[0]["file"],
-               "load_address": programs[0]["load_address"], "program_size": len(first[1])}
-        return self._store_c64(slug, workdir, title, f"{len(found)} programs", rom, programs[0]["load_address"],
-                               len(first[1]), entries, programs, log, toolchain)
-
-    def _store_c64(self, slug: str, workdir: Path, title: str, container: str, rom: dict, base: int, size: int,
-                   entries: list[tuple[str, list[c64.C64Function]]], programs: list[dict], log,
-                   toolchain: str | None = None) -> str:
-        count = sum(len(functions) for _, functions in entries)
-        toolchain = "cc65" if toolchain == "cc65" else C64_ASM
-        if toolchain == "cc65":
-            try:
-                toolchains.ensure("cc65", log=log)
-            except (toolchains.ToolchainError, OSError) as e:
-                log(f"cc65 isn't installed ({e}); install it from Compilers & tools, or put it on your PATH")
-        cfg = {
-            "kind": "rom", "platform": "c64", "big_endian": False, "gp": 0,
-            "rom": rom,
-            "segments": [{"name": "prg", "rom_start": 2, "rom_end": size, "vram": base}],
-            "compiler": {"toolchain": toolchain, "flags": toolchains.get("cc65").flags if toolchain == "cc65" else [],
-                         "timeout": 20},
-            "legal": {"basis": "personal-copy", "license": "personal use only",
-                      "statement": "imported by the owner of this copy of the game, who confirmed it was legally obtained",
-                      "confirmed_at": time.time()},
-            "context": {"file": None},
-        }
-        if programs:
-            cfg["programs"] = programs
-        now = time.time()
-        with self.store.tx() as db:
-            pid = db.execute("INSERT INTO projects(slug,name,description,arch,big_endian,root,config) VALUES(?,?,?,?,?,?,?)",
-                             (slug, title, f"{container} · {count} reachable functions",
-                              "mos6502", 0, str(workdir), json.dumps(cfg))).lastrowid
-            for unit, functions in entries:
-                for fn in functions:
-                    db.execute(
-                        "INSERT INTO functions(project_id,name,size,n_insns,target,relocs,asm,seed,unit,vram,rom_offset) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                        (pid, fn.name, len(fn.code), fn.n_insns, fn.code, "[]", fn.asm, None, unit, fn.address,
-                         fn.rom_offset))
-                    db.execute("INSERT INTO symbols(project_id,name,address,size,kind) VALUES(?,?,?,?,?)",
-                               (pid, fn.name, fn.address, len(fn.code), "func"))
-            db.execute("INSERT INTO context_versions(project_id,version,header,agent_id,message,created_at,unit) "
-                       "VALUES(?,?,?,?,?,?,?)", (pid, 1, "", None, "6510 assembly project", now, ""))
-            self._event(db, pid, None, "import", f"{count} functions from {title}")
-        log(f"ready: {count} reachable functions to match")
         return slug
 
     def _import_gba(self, picked, slug: str, workdir: Path, toolchain: str | None, flags: list[str] | None, log) -> str:
@@ -726,8 +530,6 @@ class RomNetwork(Network):
 
     def _seed_for(self, fn, proj) -> str | None:
         """m2c draft, made the first time someone opens the function (imports stay fast)."""
-        if self.cfg(proj).get("platform") == "c64":
-            return None
         if fn["seed"] is not None or not seeds.available():
             return fn["seed"]
         tc = self.cfg(proj)["compiler"]["toolchain"]
@@ -960,8 +762,6 @@ class RomNetwork(Network):
         syms = self.symbols(proj["id"])
         if not IDENT.match(new_name) or new_name in syms.by_name:
             raise NetworkError(f"`{new_name}` is not a free C identifier")
-        if self.cfg(proj).get("platform") == "c64":
-            return self._split_c64(agent, proj, fn, addr, new_name, syms)
         if self.cfg(proj).get("platform") == "gba":
             return self._split_gba(agent, proj, fn, addr, new_name, syms)
         rf = self._parse_asm(fn["name"], fn["asm"], fn["unit"])
@@ -989,69 +789,6 @@ class RomNetwork(Network):
         self._xrefs.pop(proj["id"], None)
         return (f"✅ split: {fn['name']} is now {len(head.lines)} instructions; {new_name} at 0x{addr:08X} has "
                 f"{len(tail.lines)}. Continue with {fn['name']} (get_function shows its new assembly).")
-
-    def _split_c64(self, agent: Agent, proj, fn, addr: int, new_name: str, syms: SymbolTable) -> str:
-        code = fn["target"]
-        offset = addr - fn["vram"]
-        md = capstone.Cs(capstone.CS_ARCH_MOS65XX, capstone.CS_MODE_MOS65XX_6502)
-        if 0 < offset < len(code):
-            boundaries = {ins.address - fn["vram"] for ins in md.disasm(code, fn["vram"])}
-            if offset not in boundaries:
-                raise NetworkError(f"0x{addr:04X} isn't a 6510 instruction boundary inside {fn['name']}")
-            head, tail = code[:offset], code[offset:]
-            head_size, tail_size = len(head), len(tail)
-            head_asm, tail_asm = c64.listing(head, fn["vram"]), c64.listing(tail, addr)
-            head_insns = max(1, sum(1 for _ in md.disasm(head, fn["vram"])))
-            tail_insns = max(1, sum(1 for _ in md.disasm(tail, addr)))
-            tail_rom = fn["rom_offset"] + offset
-        else:
-            rom, segments = self._rom(proj)
-            program = next((p for p in self.cfg(proj).get("programs", []) if p["unit"] == fn["unit"]), None)
-            if program is not None:  # a folder project: each program has its own address space
-                rom = (Path(proj["root"]) / program["file"]).read_bytes()
-                segments = [split.Segment("prg", 2, len(rom), int.from_bytes(rom[:2], "little"))]
-            segment = next((seg for seg in segments if seg.contains(addr)), None)
-            if offset < len(code) or segment is None:
-                raise NetworkError(f"0x{addr:04X} isn't a 6510 instruction boundary in {fn['name']}")
-            if self.store.one("SELECT 1 FROM functions WHERE project_id=? AND vram=? AND unit=?",
-                              proj["id"], addr, fn["unit"]):
-                raise NetworkError(f"there is already a function at 0x{addr:04X}")
-            discovered = next((item for item in c64.split(rom, entries=[addr]) if item.address == addr), None)
-            if discovered is None:
-                raise NetworkError(f"couldn't decode 6510 code at 0x{addr:04X}")
-            tail = discovered.code
-            next_fn = self.store.one("SELECT vram FROM functions WHERE project_id=? AND vram>? AND unit=? "
-                                     "ORDER BY vram LIMIT 1", proj["id"], addr, fn["unit"])
-            if next_fn:
-                tail = tail[:next_fn["vram"] - addr]
-            tail_size = len(tail)
-            if not tail:
-                raise NetworkError(f"there are no 6510 bytes available at 0x{addr:04X}")
-            tail_asm = c64.listing(tail, addr)
-            tail_insns = max(1, sum(1 for _ in md.disasm(tail, addr)))
-            tail_rom = segment.rom_start + addr - segment.vram
-            head = head_asm = None
-            head_size = head_insns = 0
-
-        syms.add(Symbol(new_name, addr, tail_size, "func"))
-        with self.store.tx() as db:
-            if head is not None:
-                db.execute("UPDATE functions SET size=?, n_insns=?, target=?, asm=?, seed=NULL, best_score=NULL WHERE id=?",
-                           (head_size, head_insns, head, head_asm, fn["id"]))
-                db.execute("UPDATE symbols SET size=? WHERE project_id=? AND name=?",
-                           (head_size, proj["id"], fn["name"]))
-            db.execute("INSERT INTO functions(project_id,name,size,n_insns,target,relocs,asm,seed,unit,vram,rom_offset) "
-                       "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                       (proj["id"], new_name, tail_size, tail_insns, tail, "[]", tail_asm, None,
-                        fn["unit"], addr, tail_rom))
-            db.execute("INSERT OR REPLACE INTO symbols(project_id,name,address,size,kind) VALUES(?,?,?,?,?)",
-                       (proj["id"], new_name, addr, tail_size, "func"))
-            self._event(db, proj["id"], agent.id, "split", f"{fn['name']} / {new_name}")
-        self._xrefs.pop(proj["id"], None)
-        self._ops.pop(proj["id"], None)
-        if head is None:
-            return f"✅ new function {new_name} at 0x{addr:04X}, {tail_size} bytes."
-        return f"✅ split: {fn['name']} is now {head_size} bytes; {new_name} at 0x{addr:04X} has {tail_size}."
 
     def _split_gba(self, agent: Agent, proj, fn, addr: int, new_name: str, syms: SymbolTable) -> str:
         """Cut a GBA function's bytes and assembly in two at `addr` (Thumb: a halfword boundary)."""
@@ -1518,12 +1255,10 @@ class RomNetwork(Network):
         """Write a rebuildable source tree (the base for ports and mods) and prove it rebuilds the game."""
         if self.fork_slug(slug):  # a fork's work is already in its source tree, committed
             return {"path": self._project(slug)["root"], "identical": None}
-        proj = self._project(slug)
-        if self.cfg(proj).get("platform") == "c64":
-            raise NetworkError("C64 project export isn't supported yet; matched assembly and C remain in the project.")
         from ..rom.export import export_rom
         from ..rom.export_gba import export_gba
 
+        proj = self._project(slug)
         export = export_gba if self.cfg(proj).get("platform") == "gba" else export_rom
         res = export(self, slug, Path(proj["root"]) / "source", log=log)
         with self.store.tx() as db:  # shown on the project page: what's in the tree and whether it rebuilds
@@ -1561,24 +1296,16 @@ class RomNetwork(Network):
             "SELECT COUNT(*) AS total, SUM(status='matched') AS matched, SUM(size) AS bytes, "
             "SUM(CASE WHEN status='matched' THEN size ELSE 0 END) AS matched_bytes, SUM(attempts) AS attempts "
             "FROM functions WHERE project_id=?", proj["id"])
-        c64_project = cfg.get("platform") == "c64"
-        c64_c = c64_project and cfg["compiler"]["toolchain"] == "cc65"
-        tc = toolchains.get("cc65" if c64_c else cfg["compiler"]["toolchain"]) if not c64_project or c64_c else None
-        if c64_project and not c64_c:
-            compiler = {"toolchain": "6502-asm", "name": "MOS 6510 assembler", "flags": [],
-                        "installed": True, "proprietary": False, "supported": True, "wsl": False, "why": None}
-        else:
-            on_path = c64_c and shutil.which("cc65") is not None  # a cc65 the user installed themselves also works
-            compiler = {"toolchain": tc.id, "name": SHORT_NAMES.get(tc.id, tc.name), "flags": cfg["compiler"]["flags"],
-                        "installed": toolchains.installed(tc.id) is not None or on_path, "proprietary": tc.proprietary,
-                        "supported": tc.supported or on_path, "wsl": tc.via_wsl,
-                        "why": None if tc.supported else toolchains.unsupported_cpu()}
+        tc = toolchains.get(cfg["compiler"]["toolchain"])
+        compiler = {"toolchain": tc.id, "name": SHORT_NAMES.get(tc.id, tc.name), "flags": cfg["compiler"]["flags"],
+                    "installed": toolchains.installed(tc.id) is not None, "proprietary": tc.proprietary,
+                    "supported": tc.supported, "wsl": tc.via_wsl,
+                    "why": None if tc.supported else toolchains.unsupported_cpu()}
         return {
             "slug": proj["slug"], "title": proj["name"], "description": proj["description"],
             "platform": cfg.get("platform", "n64"), "platform_name": detect.PLATFORMS.get(cfg.get("platform", "n64"), ""),
             "compilers": PLATFORM_COMPILERS.get(cfg.get("platform", "n64"), []),
-            "rom": {k: cfg["rom"].get(k) for k in ("title", "game_code", "region", "size", "sha1", "byte_order",
-                                                    "compiler_guess", "container", "load_address")},
+            "rom": {k: cfg["rom"].get(k) for k in ("title", "game_code", "region", "size", "sha1", "byte_order", "compiler_guess")},
             "compiler": compiler,
             "functions": agg["total"] or 0, "matched": agg["matched"] or 0, "bytes": agg["bytes"] or 0,
             "matched_bytes": agg["matched_bytes"] or 0, "attempts": agg["attempts"] or 0,
@@ -1791,7 +1518,7 @@ class RomNetwork(Network):
             db.execute("INSERT INTO claims VALUES(?,?,?,?)", (fn["id"], agent.id, now, now + 300))
         try:
             ctx = self._context(proj["id"], fn["unit"])
-            result = self._compile_function(fn, proj, ctx["header"], source)
+            result = self._compile(proj, ctx["header"], source)
             if not result.ok:
                 return {"matched": False, "score": None}
             cand, verdict, _ = self._evaluate(fn, proj, result.obj)
@@ -1824,7 +1551,7 @@ class RomNetwork(Network):
             if not draft:
                 return "fail"
             source = f"/* machine draft (m2c), tried by autopilot */\n{seeds.M2C_MACROS}\n{draft}\n"
-            result = self._compile_function(fn, proj, ctx["header"], source)
+            result = self._compile(proj, ctx["header"], source)
             if not result.ok:
                 return "fail"
             cand, verdict, _ = self._evaluate(fn, proj, result.obj)
@@ -1859,7 +1586,7 @@ class RomNetwork(Network):
         key = (fn["id"], hashlib.sha1(source.encode()).hexdigest(), ctx["version"], proj["config"])
         if key in self._diffs:
             return self._diffs[key] | {"kind": kind}
-        result = self._compile_function(fn, proj, ctx["header"], source)
+        result = self._compile(proj, ctx["header"], source)
         if not result.ok:
             out = {"rows": None, "error": result.log.strip()[-3000:] or "it didn't compile", "source": source}
         else:
@@ -1959,17 +1686,6 @@ class RomNetwork(Network):
         if self.fork_slug(slug):
             raise NetworkError("a fork builds with the project's own compilers and flags")
         proj = self._project(slug)
-        if self.cfg(proj).get("platform") == "c64":
-            if toolchain not in (C64_ASM, "cc65"):
-                raise NetworkError("C64 projects are matched as 6510 assembly (6502-asm) or as C compiled with cc65")
-            cfg = self.cfg(proj)
-            cfg["compiler"] = {"toolchain": toolchain, "flags": toolchains.get("cc65").flags if toolchain == "cc65" else [],
-                               "timeout": 20}
-            if toolchain == "cc65":
-                toolchains.ensure("cc65")
-            with self.store.tx() as db:
-                db.execute("UPDATE projects SET config=? WHERE id=?", (json.dumps(cfg), proj["id"]))
-            return
         tc = toolchains.get(toolchain)
         cfg = self.cfg(proj)
         cfg["compiler"] = {"toolchain": tc.id, "flags": flags or tc.flags, "timeout": 20}

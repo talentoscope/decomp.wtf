@@ -16,7 +16,7 @@ Thanks to everyone who tried it, reported bugs and sent fixes.
   <a href="https://decomp.wtf">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-dark.png">
-      <img alt="decomp.wtf: What the function? Your AI agent decompiles games you own into C or assembly that matches the exact same bytes." src=".github/assets/banner-light.png">
+      <img alt="decomp.wtf: What the function? Your AI agent decompiles games you own into C that compiles to the exact same bytes." src=".github/assets/banner-light.png">
     </picture>
   </a>
 </p>
@@ -53,14 +53,13 @@ Thanks to everyone who tried it, reported bugs and sent fixes.
 <br>
 
 Point the AI agent you already use at a game you own. **decomp.wtf** hands it the game one function at a time,
-compiles or assembles every attempt and checks the result **byte for byte**. Score 0, or
+compiles every attempt with the game's **original compiler**, and checks the result **byte for byte**. Score 0, or
 it doesn't count. There are two ways in:
 
-- **Start from scratch.** Drop in a game for C64, N64, PlayStation 1 or 2, GameCube, Wii, Game Boy Advance or DS: a
-  PRG, D64, T64 or CRT image, ROM, disc image or program file. decomp.wtf finds reachable C64 routines or splits
-  other platforms' code into functions, and your agents take it from there. On platforms with export, the result
-  is a project that rebuilds your game byte for byte: the base for ports and mods. GameCube, Wii and N64 are the
-  [recommended](#platforms) platforms; the rest are in beta.
+- **Start from scratch.** Drop in a game for N64, PlayStation 1 or 2, GameCube, Wii, Game Boy Advance or DS: a
+  ROM, a disc image or the program file. decomp.wtf finds every function and your agents take it from there. The
+  result is a project that rebuilds your game byte for byte: the base for ports and mods. GameCube, Wii and N64
+  are the [recommended](#platforms) platforms; the rest are in beta.
 - **Continue a public decomp.** Pick one of the [245 projects on decomp.dev](https://decomp.dev) for GameCube, Wii,
   PlayStation 1 and 2, N64, GBA, DS, Switch, PC, Xbox 360 and more, add your own copy of its game, and your agents
   carry on where the community left off, in the project's real source code.
@@ -124,8 +123,8 @@ Then ask it, in your own terminal:
 > decompile my game at ~/roms/game.z64
 
 It confirms the game is your own copy, imports it, opens the live view so you can watch, and gets to work with every
-tool decomp.wtf has: the original compiler or assembler, the byte-for-byte judge, helper agents running in
-parallel (`start_agents`) and, where supported, the rebuildable export. Behind it is `decomp mcp`, an MCP server that starts the app
+tool decomp.wtf has: the original compiler, the byte-for-byte judge, the autopilot, helper agents running in
+parallel (`start_agents`) and the rebuildable export. Behind it is `decomp mcp`, an MCP server that starts the app
 when needed; you can also add it yourself (`claude mcp add decomp -- decomp mcp`).
 
 | Agent | Install it as a package instead |
@@ -138,16 +137,16 @@ when needed; you can also add it yourself (`claude mcp add decomp -- decomp mcp`
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/how-dark.png">
-    <img alt="Your game split into functions. Your agent writes C or assembly, the compiler or assembler produces machine code, and it's compared byte for byte. If it doesn't match yet, the diff goes back to the agent." src=".github/assets/how-light.png">
+    <img alt="Your ROM, split into every function by splat. Your agent writes C, the original compiler builds it, it's linked at its real address and compared byte for byte. If it doesn't match yet, the diff goes back to the agent." src=".github/assets/how-light.png">
   </picture>
 </p>
 
-1. **Open a game file.** Platform-specific tools find functions and data symbols (C64 routines are traced from
-   their entry point), and decomp.wtf recognises supported compilers.
+1. **Open a ROM.** splat and spimdisasm find every function and data symbol, and decomp.wtf recognises the
+   compiler that built the game.
 2. **Add agents.** Each claims a different function and gets its assembly, the data it touches, who calls it, a
    machine-made first draft and notes from earlier attempts.
-3. **Watch them match.** Every attempt is compiled or assembled at the function's real address and compared with
-   the game bytes. A miss returns an instruction diff; a hit is saved, named and shared with every other agent.
+3. **Watch them match.** Every attempt is compiled, *linked* at the function's real address and compared with the
+   ROM. A miss returns an instruction diff; a hit is saved, named and shared with every other agent.
 
 <details>
 <summary><b>What a match looks like</b></summary>
@@ -312,7 +311,6 @@ the game.
 | **PlayStation** | Beta | ✓ disc (.bin, .iso, .chd) or EXE | GCC 2.7.2 / 2.8.1 (PSY-Q era) | ✓ export | ✓ |
 | **PlayStation 2** | Beta | ✓ disc or ELF | EE-GCC 2.96 | ✓ export | ✓ |
 | **Game Boy Advance** | Beta | ✓ ROM | agbcc | ✓ export | ✓ |
-| **Commodore 64** | Beta | ✓ PRG, D64, T64, CRT | 6510 assembly · cc65 (optional) | — | — |
 | **Nintendo DS** | Beta | ✓ ROM (.nds) | CodeWarrior for DS 1.2 – DSi 1.6 | ✓ ds-decomp | ✓ |
 | **3DS · PSP · Switch · PC · Xbox · Xbox 360** | coming | | | | ✓ |
 
@@ -328,16 +326,10 @@ full decomp you can port and mod:
   its original address: right for matching and for a port, while a mod that makes code bigger needs a shiftable
   build, which is coming.
 
-**Beta: PlayStation, PlayStation 2, Game Boy Advance, C64 and DS.** They work end to end and are tested on homemade
+**Beta: PlayStation, PlayStation 2, Game Boy Advance and DS.** They work end to end and are tested on homemade
 games, much less on real ones so far. Expect rough edges, and please
 [report](https://github.com/i12bp8/decomp.wtf/issues) what you hit: the app's error panel copies everything an issue
-needs. C64 imports extract the first PRG program from a D64 or T64, or the first CHIP packet from a CRT. TAP tape images
-aren't read directly: first extract the PRGs with [TAPClean](https://sourceforge.net/projects/tapclean/) (command
-line) or TAPClean FE, "tapcleanfe" (GUI), then import the `.prg`, or the whole folder of PRGs at once (programs without reachable code are skipped, and
-repeated programs or routines, common in tape dumps, are only imported once). Imports discover
-routines reachable through direct calls; indirect control flow may need manual splitting. C64 matching is available
-in assembly; C matching requires cc65 on PATH. C64 export is not available yet. Public decomps of any platform run
-in their own project's build, so their status is the project's.
+needs. Public decomps of any platform run in their own project's build, so their status is the project's.
 
 **From scratch.** splat and spimdisasm split MIPS games, decomp-toolkit analyses GameCube and Wii programs inside a
 generated [dtk-template](https://github.com/encounter/dtk-template) project, [ds-decomp](https://github.com/AetiasHax/ds-decomp)

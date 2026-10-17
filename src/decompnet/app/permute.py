@@ -26,6 +26,7 @@ log = logging.getLogger("decomp.wtf")
 NEAR = 0.06  # a near miss: at most this much of the function differs (best_score <= 6% of n_insns * 100)
 SECONDS = 60  # per function per turn
 MAX_TURNS = 4  # turns per function before it's left to agents
+MAX_ATTEMPTS = 100  # rewrites tried per function per turn
 NO_MUTATION_LIMIT = 64  # release the claim quickly when the source has no supported rewrites
 
 
@@ -136,7 +137,8 @@ class Permuter:
             best = cur = fn["best_score"]
             deadline = time.monotonic() + SECONDS
             no_mutations = 0
-            while time.monotonic() < deadline and best > 0 and not st.stop.is_set():
+            attempts = 0
+            while attempts < MAX_ATTEMPTS and time.monotonic() < deadline and best > 0 and not st.stop.is_set():
                 cand = mutate(cur_src if rng.random() < 0.85 else best_src, rng)
                 if cand is None:
                     no_mutations += 1
@@ -145,6 +147,7 @@ class Permuter:
                     continue
                 no_mutations = 0
                 st.variants += 1
+                attempts += 1
                 score = self._score(agent, proj, fn, cand, best, fork, st)
                 if score is None:
                     st.failed += 1

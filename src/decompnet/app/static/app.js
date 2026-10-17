@@ -4,9 +4,7 @@
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const hex8 = (n) => (typeof S !== "undefined" && S.ov && S.ov.platform === "c64")
-  ? "$" + (n >>> 0).toString(16).toUpperCase().padStart(4, "0")
-  : "0x" + (n >>> 0).toString(16).toUpperCase().padStart(8, "0");
+const hex8 = (n) => "0x" + (n >>> 0).toString(16).toUpperCase().padStart(8, "0");
 const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 const pctOf = (best, insns) => (best == null ? null : Math.max(0, 1 - best / Math.max(1, insns * 100)));
 /* A match percentage that never reads 100% before the function really matches (99.6% stays 99.6%). */
@@ -219,18 +217,8 @@ drop.addEventListener("click", (e) => { if (!$("dropIdle").hidden && !e.target.c
 drop.addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && !$("dropIdle").hidden && e.target === drop) { e.preventDefault(); $("file").click(); } });
 drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
 drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-drop.addEventListener("drop", (e) => {
-  e.preventDefault(); drop.classList.remove("over");
-  const entry = e.dataTransfer.items && e.dataTransfer.items[0] && e.dataTransfer.items[0].webkitGetAsEntry && e.dataTransfer.items[0].webkitGetAsEntry();
-  if (entry && entry.isDirectory) { droppedFolder(entry).then((files) => pickFolder(files, entry.name)).catch((err) => toast(esc(err.message), "err")); return; }
-  if (e.dataTransfer.files.length > 1) return pickFolder([...e.dataTransfer.files], "C64 programs");
-  if (e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]);
-});
-$("file").addEventListener("change", () => {
-  const fs = [...$("file").files];
-  if (fs.length > 1) { $("file").value = ""; return pickFolder(fs, "C64 programs"); }
-  if (fs[0]) pickFile(fs[0]);
-});
+drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]); });
+$("file").addEventListener("change", () => { if ($("file").files[0]) pickFile($("file").files[0]); });
 $("own").addEventListener("change", updateAnalyse);
 $("cancelPick").onclick = resetDrop;
 
@@ -263,8 +251,7 @@ function parseRom(buf) {
 
 /* What the user dropped, from its first bytes (nothing is uploaded until they confirm). */
 const PLATFORM_NAME = { n64: "Nintendo 64", psx: "PlayStation", ps2: "PlayStation 2", playstation: "PlayStation 1 or 2",
-  gc: "GameCube", wii: "Wii", gcwii: "GameCube or Wii", gba: "Game Boy Advance", nds: "Nintendo DS",
-  c64: "Commodore 64" };
+  gc: "GameCube", wii: "Wii", gcwii: "GameCube or Wii", gba: "Game Boy Advance", nds: "Nintendo DS" };
 const CW_PACK = {
   gcwii: { id: "mwcc", text: "Install CodeWarrior, the compilers GameCube and Wii games were built with (about 80 MB). It's proprietary software, kept by the decomp community: only if you accept that." },
   nds: { id: "mwccarm", text: "Install CodeWarrior for DS, the compilers DS games were built with (about 50 MB). It's proprietary software, kept by the decomp community: only if you accept that." },
@@ -285,10 +272,6 @@ function identifyHead(head, file) {
   const ascii = (a, b) => text(a, b).split("\0")[0].replace(/[^\x20-\x7e]/g, "").trim();
   const stem = file.name.replace(/\.[^.]*$/, "");
   const base = { title: stem, size: file.size };
-  const ext = (file.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase() || "";
-  if (["prg", "d64", "t64", "crt"].includes(ext)) {
-    return { ...base, platform: "c64", order: ext.toUpperCase() + " program", title: stem };
-  }
   if (text(0, 8) === "PS-X EXE") return { ...base, platform: "psx", order: "PS-X EXE", entry: dv.getUint32(0x10, true) };
   if (head.length > 0xc0 && head[0xb2] === 0x96 && head[3] === 0xea) {  // GBA: fixed byte, header checksum, ARM branch
     let sum = 0;
@@ -324,12 +307,11 @@ function identifyHead(head, file) {
 function notSupported(head, file) {
   const text = (a, b) => String.fromCharCode(...head.slice(a, b));
   const ext = (file.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase() || "";
-  if (text(0, 2) === "MZ") return "That's a Windows program. PC games aren't supported yet: decomp.wtf starts from C64, N64, PlayStation 1 and 2, GameCube, Wii, Game Boy Advance and DS games.";
+  if (text(0, 2) === "MZ") return "That's a Windows program. PC games aren't supported yet: decomp.wtf starts from N64, PlayStation 1 and 2, GameCube, Wii, Game Boy Advance and DS games.";
   if (text(0, 4) === "XEX2" || ext === "xex") return "That's an Xbox 360 program. Xbox 360 games aren't supported yet.";
   if (["nsp", "xci", "nso", "nro", "nca"].includes(ext) || text(0, 4) === "NSO0" || text(0, 4) === "PFS0") return "That's a Nintendo Switch file. Switch games aren't supported yet.";
   if (["sfc", "smc"].includes(ext)) return "That's a Super Nintendo ROM. SNES games were written in assembly, not compiled from C, so there's no C source to match.";
   if (["nes", "gb", "gbc", "md", "gen", "sms", "gg", "pce"].includes(ext)) return "Games for that console were written in assembly, not compiled from C, so there's no C source to match.";
-  if (ext === "tap" || text(0, 12) === "C64-TAPE-RAW") return "That's a C64 tape image (.tap). Extract the program to a PRG first with TAPClean (command line) or TAPClean FE (GUI, \"tapcleanfe\"): https://sourceforge.net/projects/tapclean/. Then drop the .prg here.";
   if (ext === "cue") return "That's the .cue sheet: pick the .bin file next to it (the track with the game's data, usually Track 1).";
   if (["zip", "7z", "rar"].includes(ext)) return "That's an archive: unpack it first, then drop the game file inside.";
   if (ext === "apk") return "Android apps aren't supported yet.";
@@ -359,7 +341,7 @@ async function pickFile(file) {
        ["Entry", hex8(info.entry)], ["Looks like", info.compiler === "IDO" ? "IDO" : "GCC (KMC)"]]
     : [["Platform", PLATFORM_NAME[p]], ["Format", info.order], ["Size", MB(info.size)],
        info.code ? ["Game ID", info.code] : ["Entry", info.entry != null ? hex8(info.entry) : "from the disc"],
-       ["Project", ["gc", "wii", "gcwii"].includes(p) ? "dtk-template" : p === "nds" ? "ds-decomp" : p === "gba" ? "luvdis" : p === "c64" ? "6510 assembly or cc65 C" : "splat"]];
+       ["Project", ["gc", "wii", "gcwii"].includes(p) ? "dtk-template" : p === "nds" ? "ds-decomp" : p === "gba" ? "luvdis" : "splat"]];
   $("romFacts").innerHTML = facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("");
   const level = platformStatus(p);
   $("romStatus").hidden = !level;
@@ -381,11 +363,6 @@ function setupCompilers(info) {
   else if (p === "psx") fillCompilers(select, "gcc-2.7.2-psx", "PS1");
   else if (p === "ps2") fillCompilers(select, "ee-gcc-2.96", "PS2");
   else if (p === "gba") fillCompilers(select, "agbcc", "GBA");
-  else if (p === "c64") {
-    fillC64Compilers(select, "6502-asm");
-    note.hidden = false;
-    note.textContent = "Match each function as 6510 assembly, or as C compiled with cc65 (installed for you on Windows; elsewhere put cc65 on your PATH). You can change it later. Tape (.tap) images must be extracted to PRG first with TAPClean or TAPClean FE.";
-  }
   else if (p === "playstation") {
     $("compilerRow").hidden = true; note.hidden = false;
     note.textContent = "The compiler is picked from the disc: PSY-Q-era GCC for PlayStation, EE-GCC for PlayStation 2. You can change it later.";
@@ -410,12 +387,6 @@ function updateAnalyse() {
   $("analyse").disabled = !$("own").checked || (needsConsent && !$("mwAccept").checked);
 }
 $("mwAccept").addEventListener("change", updateAnalyse);
-
-function fillC64Compilers(select, current) {
-  fillCompilers(select, current, "C64");
-  select.insertAdjacentHTML("afterbegin", `<option value="6502-asm" ${current === "6502-asm" ? "selected" : ""}>6510 assembly · built in</option>`);
-  if (current === "6502-asm") select.value = "6502-asm";
-}
 
 function fillCompilers(select, current, platform) {
   const tcs = (S.st?.toolchains || []).filter((t) => t.kind === "compiler" && (!platform || !t.platform || t.platform === platform));
@@ -488,7 +459,6 @@ async function ensureCodeWarrior() {
 
 $("analyse").onclick = async () => {
   if (!picked || $("analyse").disabled) return;
-  if (picked.folder) return importFolder(picked);
   const tc = $("compilerRow").hidden ? "" : $("compilerPick").value;
   const title = `Analysing ${picked.info.title}…`;
   if (!$("mwConsent").hidden) {
@@ -498,80 +468,10 @@ $("analyse").onclick = async () => {
   const body = picked.buf instanceof Blob ? picked.buf : new Blob([picked.buf]);
   runImport(`confirmed=1${tc ? `&toolchain=${encodeURIComponent(tc)}` : ""}`, body, title, picked.name);
 };
-/* A folder of C64 programs (PRGs extracted from a tape, say): each file is uploaded, then imported as one project. */
-const C64_FILES = /\.(prg|d64|t64|crt)$/i;
-$("folderPick").onclick = (e) => { e.stopPropagation(); $("folderInput").click(); };
-$("folderInput").addEventListener("change", () => { const all = [...$("folderInput").files]; $("folderInput").value = ""; pickFolder(all); });
-async function pickFolder(all, dropped) {
-  const rel = (f) => f.webkitRelativePath || f._rel || f.name;
-  const files = all.filter((f) => C64_FILES.test(f.name)).sort((a, b) => rel(a).localeCompare(rel(b), undefined, { numeric: true }));
-  if (!files.length) {
-    const tape = all.some((f) => /\.tap$/i.test(f.name));
-    return toast(esc(tape ? "That folder has tape images (.tap). Extract the PRGs first with TAPClean or TAPClean FE, then choose the folder with the .prg files."
-      : "There are no C64 programs (.prg, .d64, .t64 or .crt) in that folder."), "err");
-  }
-  const folder = dropped || ((files[0].webkitRelativePath || "").split("/")[0]) || "C64 programs";
-  const size = files.reduce((n, f) => n + f.size, 0);
-  picked = { folder: files, info: { platform: "c64", title: folder, order: `${files.length} program file${files.length === 1 ? "" : "s"}`, size }, name: folder };
-  if (!S.st) await loadState().catch(() => {});
-  $("romFile").textContent = folder + "/";
-  $("romTitle").textContent = folder;
-  $("romFacts").innerHTML = [["Platform", "Commodore 64"], ["Format", picked.info.order], ["Size", MB(size)], ["Project", "6510 assembly or cc65 C"]]
-    .map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("");
-  $("romStatus").hidden = false;
-  $("romStatus").className = "plat-status beta";
-  $("romStatus").innerHTML = `<b>Beta.</b> Programs that hold no reachable 6510 code (graphics, screen dumps, tape loaders) are skipped; the rest become one project.`;
-  setupCompilers(picked.info);
-  $("dropIdle").hidden = true;
-  $("dropPicked").hidden = false;
-  updateAnalyse();
-}
-/* A folder dragged onto the drop zone: walk its entries (browsers only give the folder itself as a drop). */
-async function droppedFolder(entry) {
-  const out = [];
-  const walk = async (en, path) => {
-    if (en.isFile) {
-      const f = await new Promise((ok, no) => en.file(ok, no));
-      f._rel = path + en.name; out.push(f);
-    } else if (en.isDirectory) {
-      const r = en.createReader();
-      for (;;) {
-        const batch = await new Promise((ok, no) => r.readEntries(ok, no));
-        if (!batch.length) break;
-        for (const c of batch) await walk(c, path + en.name + "/");
-      }
-    }
-  };
-  await walk(entry, "");
-  return out;
-}
-
-async function importFolder(pick) {
-  const total = pick.folder.length;
-  $("dropPicked").hidden = true; $("dropBusy").hidden = false; $("impUp").hidden = false;
-  $("busyTitle").textContent = `Copying ${total} programs into decomp.wtf…`;
-  $("busyStep").textContent = "starting";
-  $("jobLog").textContent = "";
-  try {
-    let folder = "";
-    for (let i = 0; i < total; i++) {
-      const f = pick.folder[i];
-      const res = await uploadFile(`/api/import_part?name=${encodeURIComponent(f.name)}${folder ? `&folder=${folder}` : ""}`, f, () => {});
-      folder = res.folder;
-      $("impUp").firstElementChild.style.width = ((100 * (i + 1)) / total).toFixed(1) + "%";
-      $("busyStep").textContent = `${i + 1} / ${total}: ${f.name}`;
-    }
-    const tc = $("compilerRow").hidden ? "" : $("compilerPick").value;
-    await runImport(`confirmed=1&folder=${folder}&name=${encodeURIComponent(pick.name)}${tc ? `&toolchain=${encodeURIComponent(tc)}` : ""}`, undefined, `Analysing ${pick.name}…`, pick.name);
-  } catch (e) {
-    importFailed(pick.name, e, "");
-  }
-}
-
 $("pathPick").onclick = (e) => {
   e.stopPropagation();
-  const body = dialog("Use a file on this computer", `<p class="muted">For big disc images: decomp.wtf reads the file where it is instead of copying it through the browser. For C64 you can also give a folder of PRG files.</p>
-    <label class="field"><span>Path to the game file or folder</span><input id="ppPath" class="mono" placeholder="/home/me/games/my-game.iso"></label>
+  const body = dialog("Use a file on this computer", `<p class="muted">For big disc images: decomp.wtf reads the file where it is instead of copying it through the browser.</p>
+    <label class="field"><span>Path to the game file</span><input id="ppPath" class="mono" placeholder="/home/me/games/my-game.iso"></label>
     <label class="check"><input type="checkbox" id="ppOwn"><span>This is my own copy of this game, obtained legally. The results stay with me for my own use.</span></label>
     <div class="row"><button class="primary" id="ppGo" type="button" disabled>Start decompiling</button><button class="ghost" data-close type="button">Cancel</button></div>`);
   body.querySelector("#ppOwn").onchange = () => { $("ppGo").disabled = !$("ppOwn").checked; };
@@ -1172,7 +1072,7 @@ async function installToolchain(id, proprietary) {
 
 /* ------------------------------------------------------------------ public decomps */
 const PLAT_ORDER = ["gc", "wii", "ps", "ps2", "n64", "gba", "nds", "switch", "win32", "xbox360", "3ds", "xbox", "psp"];
-const PLAT_SHORT = { c64: "C64", gc: "GameCube", wii: "Wii", ps: "PS1", psx: "PS1", ps2: "PS2", n64: "N64", gba: "GBA", nds: "DS", switch: "Switch", win32: "PC", xbox360: "Xbox 360", "3ds": "3DS", xbox: "Xbox", psp: "PSP" };
+const PLAT_SHORT = { gc: "GameCube", wii: "Wii", ps: "PS1", psx: "PS1", ps2: "PS2", n64: "N64", gba: "GBA", nds: "DS", switch: "Switch", win32: "PC", xbox360: "Xbox 360", "3ds": "3DS", xbox: "Xbox", psp: "PSP" };
 const cat = { list: null, downloaded: null, plat: "", q: "", done: false };
 
 /* The list decomp.dev had, as this install downloaded it before the directory was retired (none on a new one). */
@@ -1958,9 +1858,7 @@ async function refreshFn(first) {
     S.fnDetail = d;
     $("fnAddr").textContent = S.ov.kind === "fork"
       ? `${d.unit} · ${d.insns} instructions${d.match_percent != null ? ` · ${d.match_percent >= 100 ? "100" : (Math.floor(d.match_percent * 10) / 10).toFixed(1)}% now` : ""}`
-      : S.ov.platform === "c64"
-        ? `${hex8(d.vram)} · ${d.unit && d.unit !== "rom" ? `${d.unit} · ` : ""}${d.insns} instructions`
-        : `${hex8(d.vram)} · ROM 0x${d.rom_offset.toString(16).toUpperCase()} · ${d.insns} instructions`;
+      : `${hex8(d.vram)} · ROM 0x${d.rom_offset.toString(16).toUpperCase()} · ${d.insns} instructions`;
     $("fnName").textContent = d.name;
     fnBadge(d);
     const pinned = (S.ov.priority || []).includes(d.name);
@@ -1979,9 +1877,8 @@ async function refreshFn(first) {
       } catch (e) { toast(esc(e.message), "err"); }
     };
     $("fnAsm").innerHTML = highlightAsm(d.asm);
-    const asm64 = S.ov.platform === "c64" && S.ov.compiler.toolchain !== "cc65";
-    const kinds = { matched: asm64 ? "Matching source" : "Matching C", best: "Best attempt so far", latest: S.ov.kind === "fork" ? "In the source now" : "Latest attempt", draft: "Machine draft (m2c)" };
-    $("fnSrcKind").textContent = kinds[d.source_kind] || (asm64 ? "No attempt yet" : "No C yet");
+    const kinds = { matched: "Matching C", best: "Best attempt so far", latest: S.ov.kind === "fork" ? "In the source now" : "Latest attempt", draft: "Machine draft (m2c)" };
+    $("fnSrcKind").textContent = kinds[d.source_kind] || "No C yet";
     if (!S.editDirty || first) setEditor(d.source || "", d);
     $("copySrc").onclick = () => navigator.clipboard.writeText($("fnEdit").value).then(() => toast("Copied."));
     renderFnChart(d);
@@ -2002,8 +1899,7 @@ async function refreshFn(first) {
 /* Editing a function yourself: a highlighted editor over a textarea, judged like an agent's attempt. */
 function setEditor(source, d) {
   const ta = $("fnEdit");
-  ta.value = source || (d && d.status !== "matched"
-    ? (S.ov && S.ov.platform === "c64" && S.ov.compiler.toolchain !== "cc65" ? `; write ${d.name} as 6502 assembly here\n` : `/* write ${d.name} here */\n`) : "");
+  ta.value = source || (d && d.status !== "matched" ? `/* write ${d.name} here */\n` : "");
   paintEditor();
   S.editDirty = false;
 }
@@ -2459,7 +2355,7 @@ function renderSource(ov) {
     return;
   }
   if (!ov.exportable) {
-    $("srcText").textContent = `Exporting a rebuildable project isn't available for ${ov.platform_name || "this platform"} yet. Your matched code is kept in the project.`;
+    $("srcText").textContent = `Exporting a rebuildable project isn't available for ${ov.platform_name || "this platform"} yet. Your matched C is kept in the project.`;
     $("srcState").innerHTML = "";
     return;
   }
@@ -2496,9 +2392,7 @@ async function renderProjectSettings() {
   $("compilerPanel").hidden = fork;
   if (!fork) {
     if (!S.st) await loadState();
-    $("compilerPanel").hidden = false;
-    if (ov.platform === "c64") fillC64Compilers($("setTc"), ov.compiler.toolchain);
-    else fillCompilers($("setTc"), ov.compiler.toolchain, { n64: "N64", psx: "PS1", ps2: "PS2", gba: "GBA" }[ov.platform]);
+    fillCompilers($("setTc"), ov.compiler.toolchain, { n64: "N64", psx: "PS1", ps2: "PS2", gba: "GBA" }[ov.platform]);
     $("setFlags").value = ov.compiler.flags.join(" ");
   }
   const facts = [["Platform", ov.platform_name], ["Game", ov.rom?.title || ov.title], [fork ? "Version" : "Game code", ov.rom?.game_code || ov.version],

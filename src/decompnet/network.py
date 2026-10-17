@@ -195,10 +195,6 @@ class Network:
         root = Path(proj["root"])
         return compile_source(compiler_config(root, json.loads(proj["config"])), header, source)
 
-    def _compile_function(self, fn, proj, header: str, source: str):
-        """Compile a submission whose assembler needs the target function's address."""
-        return self._compile(proj, header, source)
-
     def _evaluate(self, fn, proj, obj: bytes) -> tuple[FunctionObj | None, bool | None, list[str]]:
         """(candidate, verdict, problems) for a compiled object. verdict None means: decide by comparing
         fingerprints. Projects whose targets come from a ROM link the candidate instead (see app.engine)."""
@@ -394,7 +390,7 @@ class Network:
                     db.execute("UPDATE claims SET expires_at=? WHERE function_id=?", (now + self.claim_ttl, fn["id"]))
 
         ctx = self._context(proj["id"], fn["unit"])
-        result = self._compile_function(fn, proj, ctx["header"], source)
+        result = self._compile(proj, ctx["header"], source)
 
         if not result.ok:
             self._record(fn, agent, None, source, ctx["version"])
@@ -594,8 +590,8 @@ class Network:
             "SELECT * FROM functions WHERE project_id=? AND status='matched'", proj["id"])
 
         def check(fn) -> tuple[str, str] | None:
-            res = self._compile_function(fn, proj, header_for(fn) if header_for else header,
-                                         (sources or {}).get(fn["id"], fn["matched_source"]))
+            res = self._compile(proj, header_for(fn) if header_for else header,
+                                (sources or {}).get(fn["id"], fn["matched_source"]))
             if not res.ok:
                 return fn["name"], "no longer compiles: " + res.log.strip().splitlines()[0][:200] if res.log.strip() else "compile failed"
             cand, verdict, _ = self._evaluate(fn, proj, res.obj)

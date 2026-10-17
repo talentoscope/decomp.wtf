@@ -25,6 +25,22 @@ def test_permuter_releases_a_function_it_cannot_rewrite(monkeypatch):
     assert released == [True]
 
 
+def test_permuter_stops_after_max_attempts(monkeypatch):
+    worker = Permuter(SimpleNamespace(fork_slug=lambda _: None))
+    fn = {"id": 3, "name": "busy", "best_source": "void f(void) {}", "best_score": 5}
+    st = State()
+    scored = []
+
+    monkeypatch.setattr(worker, "_hold", lambda *_: True)
+    monkeypatch.setattr(worker, "_let_go", lambda *_: None)
+    monkeypatch.setattr(worker, "_score", lambda *a, **k: scored.append(1) or 9)
+    monkeypatch.setattr(permute, "mutate", lambda src, rng: src + " ")
+
+    worker._permute(SimpleNamespace(id=1), {"slug": "demo"}, fn, st)
+
+    assert len(scored) == permute.MAX_ATTEMPTS == 100
+
+
 def test_permuter_does_not_spend_a_turn_when_claim_is_taken(monkeypatch):
     worker = Permuter(SimpleNamespace(fork_slug=lambda _: None))
     monkeypatch.setattr(worker, "_hold", lambda *_: False)
