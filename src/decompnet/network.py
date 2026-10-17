@@ -389,6 +389,12 @@ class Network:
                 else:
                     db.execute("UPDATE claims SET expires_at=? WHERE function_id=?", (now + self.claim_ttl, fn["id"]))
 
+        return self._judge(agent, fn, proj, source, scratch)
+
+    def _judge(self, agent: Agent, fn, proj, source: str, scratch: bool) -> dict:
+        """Judge one attempt, record it and word the verdict: {"text", "score", "matched"} (score None: didn't
+        compile). The byte-exact judge: compile with the project's compiler and compare the machine code. A platform
+        whose code can't be matched that way overrides this (or dispatches on `proj`) with its own judge."""
         ctx = self._context(proj["id"], fn["unit"])
         result = self._compile(proj, ctx["header"], source)
 
