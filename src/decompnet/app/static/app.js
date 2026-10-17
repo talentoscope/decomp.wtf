@@ -1924,9 +1924,13 @@ async function openFn(name) {
 function fnBadge(d = S.fnDetail) {
   if (!d) return;
   const working = S.claims.find((c) => c.name === d.name);
+  const pm = S.ov && S.ov.permuter;
+  const permuting = working && working.agent === "permuter" && pm && pm.current === d.name;
   const st = $("fnStatus");
   st.className = "badge " + (d.status === "matched" ? "matched" : working ? "working" : "");
-  st.textContent = d.status === "matched" ? "matched" : working ? `${working.agent} working` : d.best != null ? `best ${pctText(pctOf(d.best, d.insns))}` : "not started";
+  st.textContent = d.status === "matched" ? "matched" : permuting
+    ? `permuter: ${pm.compiled} compiled, ${pm.failed} didn't${pm.lowest != null ? `, closest ${pctText(pctOf(pm.lowest, d.insns))}` : ""}`
+    : working ? `${working.agent} working` : d.best != null ? `best ${pctText(pctOf(d.best, d.insns))}` : "not started";
 }
 
 function showFnTab(tab) {
@@ -2382,8 +2386,8 @@ function renderAutopilot(ov) {
   $("apBar").hidden = !running || ap.phase === "twins";
   const perm = pm && (pm.tried || pm.state === "running")
     ? ` The permuter ${pm.state === "running" ? (pm.current
-      ? `is trying rewrites (now ${pm.current}; ${plural(pm.variants, "rewrite")} tried)`
-      : "is waiting for near misses") : "rewrote near misses"}: ${plural(pm.tried, "function")}, ${plural(pm.variants, "rewrite")} tried, ${pm.matched} matched.` : "";
+      ? `is trying rewrites (now ${pm.current}: ${pm.compiled} compiled${pm.failed ? `, ${pm.failed} didn't` : ""}${pm.lowest != null ? `, closest ${pm.lowest}` : ""})`
+      : "is waiting for near misses") : "rewrote near misses"}: ${plural(pm.tried, "function")}, ${plural(pm.variants, "rewrite")} tried, ${pm.matched} matched.${pm.failed && pm.error ? ` Last compile error: ${pm.error}` : ""}` : "";
   const twinsDone = (ap && ap.twins) || (tw && tw.matched) || 0;
   if (running && ap.phase === "twins") {
     $("apTitle").textContent = "Autopilot: matching code the game has more than once (twins of matched functions)";
