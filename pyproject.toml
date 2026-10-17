@@ -16,6 +16,7 @@ dependencies = [
     "splat64[mips]>=0.50.1",
     "spimdisasm>=1.42.4",
     "rabbitizer>=1.16.2",
+    "py65>=1.2.0",
     "httpx>=0.28",
     "uvicorn>=0.30",
     "ninja>=1.11",  # builds GameCube/Wii (dtk) and other ninja-based decomp projects

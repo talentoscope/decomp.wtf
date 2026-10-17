@@ -453,10 +453,15 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         else:
             if q.get("confirmed") != "1":
                 return fail(ValueError("confirm that this is your own legally obtained copy of the game"))
-            if q.get("path"):
+            if q.get("folder"):  # a folder the browser uploaded file by file (see /api/import_part)
+                game = home / "uploads" / re.sub(r"[^0-9a-f]", "", q["folder"])[:8]
+                if not game.is_dir():
+                    return fail(ValueError("that upload is gone: choose the folder again"))
+                name = Path(q.get("name") or "").name
+            elif q.get("path"):
                 game = hostenv.local_path(q["path"])
-                if not game.is_file():
-                    return fail(ValueError(f"no file at {game}"))
+                if not (game.is_file() or game.is_dir()):
+                    return fail(ValueError(f"no file or folder at {game}"))
                 name = game.name
             else:
                 name = Path(q.get("name") or "game.bin").name
@@ -475,19 +480,42 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
                 if size == 0:
                     game.unlink(missing_ok=True)
                     return fail(ValueError("the file was empty"))
-        uploaded = isinstance(game, Path) and game.parent.parent == home / "uploads"
+        uploaded = isinstance(game, Path) and (game.parent.parent == home / "uploads" or game.parent == home / "uploads")
 
         def work(log):
             try:
                 slug = net.import_rom(game, toolchain=toolchain, confirmed=True, name=name, log=log)
             finally:
                 if uploaded:
-                    shutil.rmtree(game.parent, ignore_errors=True)
+                    shutil.rmtree(game if game.is_dir() else game.parent, ignore_errors=True)
             settings.data["last_project"] = slug
             settings.save()
             autopilot(slug)
             return {"slug": slug}
         return JSONResponse({"job": jobs.start("import", work)})
+
+    @mcp.custom_route("/api/import_part", methods=["POST"])
+    async def api_import_part(request: Request) -> Response:
+        """One program of a C64 folder the browser is uploading; /api/import?folder=<id> then imports them all."""
+        if (bad := guard(request, write=True)):
+            return bad
+        q = request.query_params
+        folder = re.sub(r"[^0-9a-f]", "", q.get("folder") or "")[:8] or uuid.uuid4().hex[:8]
+        name = Path((q.get("name") or "").replace("\\", "/")).name
+        if Path(name).suffix.lower() not in (".prg", ".d64", ".t64", ".crt"):
+            return fail(ValueError(f"{name or 'that file'} isn't a C64 program (.prg, .d64, .t64 or .crt)"))
+        target = home / "uploads" / folder
+        target.mkdir(parents=True, exist_ok=True)
+        size = 0
+        with open(target / name, "wb") as f:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > 64 * 1024 * 1024:
+                    f.close()
+                    (target / name).unlink(missing_ok=True)
+                    return fail(ValueError(f"{name} is larger than any C64 program"))
+                f.write(chunk)
+        return JSONResponse({"folder": folder})
 
     MAP_KEYS = ("name", "vram", "size", "insns", "unit", "status", "best", "attempts", "agent", "matched_at", "matched_by")
 

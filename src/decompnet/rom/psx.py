@@ -76,10 +76,16 @@ class _Disc:
 
     def read(self, lba: int, length: int) -> bytes:
         if self.size == 2048:
-            return self._get(lba * 2048, length)
+            data = self._get(lba * 2048, length)
+            if len(data) != length:
+                raise RomError(f"disc image ends before sector {lba}")
+            return data
         out = bytearray()
         while len(out) < length:
-            out += self.sector(lba)
+            sector = self.sector(lba)
+            if len(sector) != 2048:
+                raise RomError(f"disc image ends before sector {lba}")
+            out += sector
             lba += 1
         return bytes(out[:length])
 

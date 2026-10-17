@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from decompnet.rom import overlays, split
+from decompnet.rom import detect, overlays, psx, split
+from decompnet.rom.n64 import RomError
 
 ROOT = Path(__file__).resolve().parent.parent
 EXE = ROOT / "projects" / "demo-psx" / "build" / "DEMOQ_PS1.EXE"
@@ -102,3 +103,58 @@ def test_a_disc_with_an_overlay_imports_both(tmp_path):
     rows = net.store.all("SELECT name, vram FROM functions WHERE project_id=?", net.project_row(slug)["id"])
     in_overlay = [r for r in rows if 0x80180000 <= r["vram"] < 0x80181000]
     assert len(in_overlay) == 40 and len(rows) > 40  # the program's functions and the overlay's
+
+
+def test_a_truncated_disc_file_does_not_stall_import():
+    exe = bytearray(0x820)
+    exe[:8] = b"PS-X EXE"
+    struct.pack_into("<IIII", exe, 0x10, 0x80010000, 0, 0x80010000, 0x20)
+    image = bytearray(_iso({
+        "SYSTEM.CNF": b"BOOT = cdrom:\\GAME.EXE;1\r\n",
+        "GAME.EXE": bytes(exe),
+        "BROKEN.BIN": bytes(4096),
+        "BATTLE.BIN": bytes(64) + _overlay(0x80180040, 40),
+    }))
+
+    # Keep scanning later files when an incomplete track dump has an out-of-range extent.
+    root = 18 * 2048
+    offset = 0
+    while image[root + offset]:
+        record_length = image[root + offset]
+        name_length = image[root + offset + 32]
+        name = image[root + offset + 33:root + offset + 33 + name_length]
+        if name == b"BROKEN.BIN;1":
+            struct.pack_into("<I", image, root + offset + 2, 0x10000)
+            break
+        offset += record_length
+    else:
+        raise AssertionError("BROKEN.BIN was not in the ISO root directory")
+
+    picked = detect.identify(bytes(image), "game.bin")
+    assert picked.platform == "psx"
+    assert picked.info["boot"] == "GAME.EXE"
+    assert [(name, address) for name, _, address, _ in picked.overlays] == [("battle", 0x80180000)]
+
+
+def test_disc_read_rejects_a_sector_past_the_image():
+    image = bytearray(17 * 2352)
+    image[16 * 2352 + 24 + 1:16 * 2352 + 24 + 6] = b"CD001"
+    disc = psx._Disc(bytes(image))
+
+    with pytest.raises(RomError, match="ends before sector 17"):
+        disc.read(17, 2048)
+
+
+def test_psx_code_is_widened_when_splat_undersizes_it(tmp_path):
+    exe = bytearray(0x4000)
+    exe[:8] = b"PS-X EXE"
+    jr_ra = bytes.fromhex("0800e003")
+    exe[0x3000:0x3004] = jr_ra
+    cfg = tmp_path / "game.yaml"
+    cfg.write_text("segments:\n  - [0x800, rodata, 800]\n  - [0x1000, c, main]\n  - [0x1100, data, 1100] # estimated\n  - [0x4000]\n",
+                   encoding="utf-8")
+    logs = []
+    split._widen_psx_code(cfg, bytes(exe), logs.append)
+
+    assert "[0x3008, data, 1100]" in cfg.read_text(encoding="utf-8")
+    assert logs

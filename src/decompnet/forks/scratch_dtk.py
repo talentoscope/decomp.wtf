@@ -108,11 +108,17 @@ def _dtk() -> str:
     return str(toolchains.binary("dtk"))
 
 
+def _disc_cwd(disc: Path) -> str | None:
+    """dtk drops the drive letter of a `disc:inner` path and resolves it on the current drive, so on Windows it has to
+    run from the disc's own drive (a disc on E: with the workspace on C: is "not found" otherwise)."""
+    return os.path.splitdrive(os.path.abspath(disc))[0] + os.sep if os.name == "nt" else None
+
+
 def _vfs_read(disc: Path, inner: str) -> bytes:
     with tempfile.TemporaryDirectory(prefix="decompwtf-disc-") as tmp:
         out = Path(tmp) / Path(inner).name
         res = subprocess.run(capped([_dtk(), "vfs", "cp", f"{disc}:{inner}", str(out)]), capture_output=True, text=True,
-                             timeout=600, encoding="utf-8", errors="replace")
+                             timeout=600, encoding="utf-8", errors="replace", cwd=_disc_cwd(disc))
         if res.returncode != 0 or not out.exists():
             raise ForkError(f"couldn't read {inner} from the disc image: {(res.stderr or res.stdout).strip()[-300:]}")
         return out.read_bytes()
@@ -138,7 +144,8 @@ def vfs_copy(disc: Path, inner: list[str], dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     for i in range(0, len(inner), 64):
         res = subprocess.run(capped([_dtk(), "vfs", "cp", "-q", *[f"{disc}:{x}" for x in inner[i:i + 64]], f"{dest}{os.sep}"]),
-                             capture_output=True, text=True, timeout=1800, encoding="utf-8", errors="replace")
+                             capture_output=True, text=True, timeout=1800, encoding="utf-8", errors="replace",
+                             cwd=_disc_cwd(disc))
         if res.returncode != 0:
             raise ForkError(f"couldn't copy files out of the disc image: {(res.stderr or res.stdout).strip()[-400:]}")
 
@@ -146,7 +153,7 @@ def vfs_copy(disc: Path, inner: list[str], dest: Path) -> None:
 def vfs_list(disc: Path) -> list[str]:
     """Every file in a disc image (paths like files/dll/m302Dll.rel)."""
     res = subprocess.run(capped([_dtk(), "vfs", "ls", "-r", "-s", f"{disc}:"]), capture_output=True, text=True,
-                         timeout=600, encoding="utf-8", errors="replace")
+                         timeout=600, encoding="utf-8", errors="replace", cwd=_disc_cwd(disc))
     if res.returncode != 0:
         raise ForkError(f"couldn't list the disc image's files: {(res.stderr or res.stdout).strip()[-300:]}")
     return [line.strip() for line in res.stdout.splitlines() if line.strip() and not line.strip().endswith("/")]

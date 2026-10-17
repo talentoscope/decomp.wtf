@@ -187,12 +187,20 @@ def _deb_data(deb: Path, out: Path) -> Path:
     raise ToolchainError(f"{deb.name} has no data.tar")
 
 
+def _owner_access(member, path):
+    """The "data" filter, and the owner always keeps read/write (directories: search too). Some archives hold
+    directories as 0111; extracted onto a Windows drive that locks the owner out of the folder, and WSL can't run
+    the compiler inside it."""
+    member = tarfile.data_filter(member, path)
+    return member.replace(mode=(member.mode or 0) | (0o700 if member.isdir() else 0o600), deep=False)
+
+
 def _extract(archive: Path, dest: Path, subdir: str | None) -> None:
     with tempfile.TemporaryDirectory(dir=dest.parent) as tmp:
         if archive.name.endswith(".deb"):
             with tempfile.TemporaryDirectory(dir=dest.parent) as raw:
                 with tarfile.open(_deb_data(archive, Path(raw))) as t:
-                    t.extractall(tmp, filter="data")
+                    t.extractall(tmp, filter=_owner_access)
         elif archive.name.endswith(".zip"):
             import zipfile
 
@@ -222,7 +230,7 @@ def _extract(archive: Path, dest: Path, subdir: str | None) -> None:
             # gz/xz in pure Python, so this works on Windows and macOS too. The "data" filter refuses
             # absolute paths, links out of the tree and device files, and drops setuid bits.
             with tarfile.open(archive) as t:
-                t.extractall(tmp, filter="data")
+                t.extractall(tmp, filter=_owner_access)
         src = Path(tmp) / subdir if subdir else Path(tmp)
         if not src.is_dir():
             raise ToolchainError(f"archive {archive.name} has no {subdir}/")
@@ -272,7 +280,7 @@ def install(tid: str, *, accept_license: bool = False, force: bool = False, log=
         downloads = root() / ".downloads"
         downloads.mkdir(parents=True, exist_ok=True)
         for part in parts:
-            archive = downloads / Path(part["url"]).name
+            archive = downloads / part.get("filename", Path(part["url"]).name)
             if not archive.exists() or (part.get("sha256") and _sha256(archive) != part["sha256"]):
                 _download(part["url"], archive, log)
             digest = _sha256(archive)

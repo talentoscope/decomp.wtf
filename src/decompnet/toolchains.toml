@@ -343,6 +343,20 @@ url = "https://github.com/encounter/gc-wii-binutils/releases/download/2.42-2/win
 sha256 = "bd95bd57607efb45c437e97b77ec199073e242869027eb72196b0720611bb1c1"
 platforms = ["windows-x86_64"]
 
+[cc65]
+name = "cc65"
+platform = "C64"
+arch = "mos6502"
+license = "Zlib"
+source = "cc65 snapshot (cc65.github.io)"
+description = "The C compiler, assembler and linker for 6502 systems: judges C for Commodore 64 programs. Windows only here; elsewhere install cc65 with your package manager."
+flags = ["-t", "c64", "-O"]
+[[cc65.parts]]
+url = "https://sourceforge.net/projects/cc65/files/cc65-snapshot-win64.zip/download"
+sha256 = "dceec034d1ef7a002bd84cb1a41667977574ab79be8ef05e19f6e40edd8ffa65"
+filename = "cc65-snapshot-win64.zip"
+platforms = ["windows-x86_64"]
+
 [agbcc]
 name = "agbcc"
 platform = "GBA"

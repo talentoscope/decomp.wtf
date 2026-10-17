@@ -31,6 +31,7 @@ _CS = {
     ("ppc", True): (capstone.CS_ARCH_PPC, capstone.CS_MODE_32 | capstone.CS_MODE_BIG_ENDIAN),
     ("arm", False): (capstone.CS_ARCH_ARM, capstone.CS_MODE_ARM),
     ("thumb", False): (capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB),
+    ("mos6502", False): (capstone.CS_ARCH_MOS65XX, capstone.CS_MODE_MOS65XX_6502),
 }
 
 _REG = re.compile(

@@ -34,6 +34,7 @@ GUIDES = {
     "ps2": "matching PlayStation 2 (EE-GCC, MWCC PS2) code",
     "arm": "ARM and Thumb (GBA, DS, 3DS): registers, conditional code, literal pools",
     "agbcc": "matching Game Boy Advance code built with agbcc",
+    "6502": "6510 instructions, addressing modes, C64 memory and matching assembly or cc65 C",
     "x86": "x86 and MSVC (PC, Xbox): calling conventions, SEH, matching MSVC output",
     "aarch64": "AArch64 and Clang (Switch): registers, matching Clang output",
     "similarity": "finding similar functions and reusing matched code",
@@ -44,13 +45,40 @@ PLATFORM_GUIDES = {
     "n64": ["mips"], "ps": ["mips", "psx"], "ps2": ["mips", "ps2"], "psp": ["mips"],
     "gc": ["ppc", "mwcc", "cpp"], "wii": ["ppc", "mwcc", "cpp"], "nds": ["arm", "mwcc"], "3ds": ["arm", "cpp"],
     "gba": ["arm", "agbcc"], "switch": ["aarch64", "cpp"], "win32": ["x86", "cpp"], "xbox": ["x86", "cpp"],
-    "xbox360": ["ppc", "cpp"],
+    "xbox360": ["ppc", "cpp"], "c64": ["6502"],
 }
 
+C64_C_PROMPT = """\
+You are decompiling {title}, a Commodore 64 game, into C that cc65 turns into the original bytes. Use only the decomp
+tools. Repeat for up to {count} claims, then stop:
+
+1. claim_function() gives you a reachable routine's address, bytes, disassembly and earlier attempts.
+2. compile_and_diff(function, source) compiles one C function with cc65 (-t c64 -O) and links it at the original
+   address. Score 0 means every byte matches. Name it exactly as the function, declare what it calls (extern
+   void func_6756(void);) and reach hardware through pointers (*(volatile unsigned char *)0xD020 = 0;). Use the
+   6502 guide for cc65 idioms. If a routine is plainly hand-written assembly, submit the 6510 assembly instead.
+3. Use get_function and find_similar to learn from matched routines. Rename functions once their purpose is clear.
+4. Release a stuck function with specific notes, then claim another.
+
+Only work on the user's own game. Never publish its code.
+"""
+
+C64_WORK_PROMPT = """\
+You are decompiling {title}, a Commodore 64 game. Work in 6510 assembly by default; C functions are also accepted
+when cc65 is installed on this computer. Use only the decomp tools. Repeat for up to {count} claims, then stop:
+
+1. claim_function() gives you a reachable routine's address, bytes, disassembly and earlier attempts.
+2. compile_and_diff(function, source) assembles 6510 mnemonics (or compiles a C function with cc65) at the
+   original address. Score 0 means every byte matches. Use the 6502 guide for syntax and calling conventions.
+3. Use get_function and find_similar to learn from matched routines. Rename functions once their purpose is clear.
+4. Release a stuck function with specific notes, then claim another.
+
+Only work on the user's own game. Never publish its code.
+"""
+
 INSTRUCTIONS = """\
-decomp.wtf: you are decompiling a game ROM that the user owns into C that compiles to exactly the same
-machine code. Your C is compiled with the game's original compiler, linked at the function's real address
-and compared with the ROM: score 0 means byte-identical, and the function is saved as matched.
+decomp.wtf: you are decompiling a game ROM that the user owns into code that matches its machine code.
+Depending on the platform, submissions are C compiled with the game's compiler or native assembly.
 Start with project_info, then claim_function -> compile_and_diff (repeat). guide(topic) has know-how.
 Everything runs on the user's computer. The game's code is the user's: never publish it anywhere.
 """
@@ -141,6 +169,11 @@ def _project_info(net: RomNetwork, slug: str) -> str:
         return net.forks.info(slug)
     ov = net.overview(slug)
     pct = 100 * ov["matched_bytes"] / (ov["bytes"] or 1)
+    if ov["platform"] == "c64":
+        return (f"{ov['title']} (Commodore 64, {ov['rom'].get('container') or 'PRG'})\n"
+                f"matcher: {ov['compiler']['name']}\n"
+                f"progress: {ov['matched']}/{ov['functions']} functions matched ({pct:.1f}% of code), "
+                f"{ov['attempts']} attempts so far\nNext: claim_function(). Read guide(\"6502\").")
     return (f"{ov['title']} ({ov['rom']['game_code']}, {ov['rom']['region']})\n"
             f"compiler: {ov['compiler']['name']} {' '.join(ov['compiler']['flags'])}\n"
             f"progress: {ov['matched']}/{ov['functions']} functions matched ({pct:.1f}% of code), "
@@ -281,10 +314,10 @@ def build_mcp(net: RomNetwork, agent_of: Callable[[Context], tuple[Agent, str]])
 
     @mcp.tool(meta=ALWAYS_LOAD)
     async def compile_and_diff(ctx: Context, function: str, source: str) -> str:
-        """Compile your code for `function` and diff it against the original; score 0 = byte-identical.
+        """Compile C or assemble 6502 code for `function` and diff it against the original; score 0 = byte-identical.
 
-        ROM projects: compiled with the game's compiler (context.h included), linked at the function's
-        address and compared with the ROM. Forks: send the complete definition (plus any #include "...",
+        ROM projects: compiled with the game's compiler or assembled at the function's address and compared with
+        the ROM. C64 also accepts C compiled with cc65 when installed. Forks: send the complete definition (plus any #include "...",
         prototypes, externs or #pragma lines it needs); it replaces the function in its source file, which is
         built with the project's build system and diffed with objdiff. Several functions ("a, b, c"): send all
         their definitions in one source; each is judged on its own."""

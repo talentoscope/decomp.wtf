@@ -115,6 +115,34 @@ def stage_dir() -> str:
     return f"/tmp/decompnet-{secrets.token_hex(8)}"
 
 
+def _mirror(argv: list[str]) -> tuple[list[str], list[str]]:
+    """Old 32-bit compilers can't look up files on a Windows drive (see run), their own passes included: GCC finds
+    cc1 there and reports it missing. So a toolchain named in `argv` is copied once into WSL's own file system, and
+    the command points at the copy. Returns the new argv and the shell lines that make the copies."""
+    from . import toolchains
+
+    base = path(toolchains.root()) + "/wsl/"
+    copies: dict[str, str] = {}
+    out = []
+    for a in argv:
+        i = a.find(base)
+        while i >= 0:
+            tid = a[i + len(base):].split("/", 1)[0]
+            if tid not in copies:
+                manifest = toolchains.root() / "wsl" / tid / toolchains.MANIFEST
+                stamp = int(manifest.stat().st_mtime) if manifest.exists() else 0
+                copies[tid] = f"/var/tmp/decompnet-tc/{tid}-{stamp}"
+            a = a[:i] + copies[tid] + a[i + len(base) + len(tid):]
+            i = a.find(base)
+        out.append(a)
+    q, lines = shlex.quote, []
+    for tid, dst in copies.items():
+        src = f"{base}{tid}"
+        lines.append(f"[ -d {q(dst)} ] || {{ rm -rf {q(dst)}.part && mkdir -p {q(dst)}.part && "
+                     f"cp -R {q(src)}/. {q(dst)}.part/ && mv {q(dst)}.part {q(dst)}; }} || exit 1")
+    return out, lines
+
+
 def run(argv: list[str], cwd: Path, timeout: float, *, outputs: list[str] | None = None,
         inputs: list[str] | None = None, stage: str | None = None) -> subprocess.CompletedProcess:
     """Run `argv` (WSL paths) inside WSL in `cwd` (a Windows folder). The command travels as a small script in the
@@ -125,11 +153,12 @@ def run(argv: list[str], cwd: Path, timeout: float, *, outputs: list[str] | None
     32-bit compilers need that: a Windows drive's file IDs don't fit in their inode numbers, so every file they look
     up there fails with "Value too large for defined data type"."""
     q, here = shlex.quote, path(cwd)
+    argv, prep = _mirror(argv)
     if outputs is None:
-        body = f"cd {q(here)} || exit 1\nexec {shlex.join(argv)}\n"
+        body = "\n".join([*prep, f"cd {q(here)} || exit 1", f"exec {shlex.join(argv)}", ""])
     else:
         stage = stage or stage_dir()
-        lines = [f"rm -rf {q(stage)} && mkdir -p {q(stage)} || exit 1", f"trap {q('rm -rf ' + q(stage))} EXIT"]
+        lines = [*prep, f"rm -rf {q(stage)} && mkdir -p {q(stage)} || exit 1", f"trap {q('rm -rf ' + q(stage))} EXIT"]
         for i in inputs if inputs is not None else ["."]:
             into = posixpath.join(stage, posixpath.dirname(i))
             lines.append(f"mkdir -p {q(into)} && cp -R {q(posixpath.join(here, i))} {q(into + '/')} || exit 1")

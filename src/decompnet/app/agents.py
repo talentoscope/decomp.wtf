@@ -757,8 +757,9 @@ class Manager:
             # CodeWarrior's register and stack rules decide most of what's left on GameCube, Wii and DS
             topics = ["fork", "objdiff", *(["mwcc"] if ov.get("platform") in ("gc", "wii", "nds") else [])]
         else:
-            topics = ["workflow", {"psx": "psx", "ps2": "ps2", "gba": "agbcc"}.get(ov.get("platform")) or (
-                "ido" if ov["compiler"]["toolchain"].startswith("ido") else "gcc-kmc")]
+            topics = ["workflow", "6502"] if ov.get("platform") == "c64" else [
+                "workflow", {"psx": "psx", "ps2": "ps2", "gba": "agbcc"}.get(ov.get("platform")) or
+                ("ido" if ov["compiler"]["toolchain"].startswith("ido") else "gcc-kmc")]
         text += "\nKnow-how you'd otherwise read with guide() (more topics: guide()):\n\n" + "\n\n".join(
             tools._guide(t) for t in topics)
         if (learned := self.net.learnings(s.slug)):
@@ -775,6 +776,9 @@ class Manager:
             return tools.FORK_PROMPT.format(title=ov["title"], platform=ov.get("platform_name") or "its platform",
                                             count=s.options.get("per_session", PER_SESSION),
                                             guides=", ".join(f'guide("{g}")' for g in guides))
+        if ov.get("platform") == "c64":
+            prompt = tools.C64_C_PROMPT if ov["compiler"]["toolchain"] == "cc65" else tools.C64_WORK_PROMPT
+            return prompt.format(title=ov["title"], count=s.options.get("per_session", PER_SESSION))
         guide = {"psx": "psx", "ps2": "ps2", "gba": "agbcc"}.get(ov.get("platform")) or (
             "ido" if ov["compiler"]["toolchain"].startswith("ido") else "gcc-kmc")
         return tools.WORK_PROMPT.format(title=ov["title"], count=s.options.get("per_session", PER_SESSION), compiler_guide=guide)
@@ -934,9 +938,13 @@ class Manager:
         headers = {"Content-Type": "application/json"}
         if s.options.get("api_key"):
             headers["Authorization"] = f"Bearer {s.options['api_key']}"
-        schema = api_tool_schemas(fork=bool(self.net.fork_slug(s.slug)))
+        one_at_a_time = is_local(base)  # local models take one function at a time, not a batch
+        schema = api_tool_schemas(fork=bool(self.net.fork_slug(s.slug)), single=one_at_a_time)
+        task = self.prompt(s)
+        if one_at_a_time:
+            task = task.replace("claim_function(count=4)", "claim_function()")
         messages = [{"role": "system", "content": tools.INSTRUCTIONS},
-                    {"role": "user", "content": self.prompt(s)}]
+                    {"role": "user", "content": task}]
         used_tool = False
         with httpx.Client(timeout=httpx.Timeout(300, connect=15)) as client:
             window = context_window(client, base, s.options)
@@ -983,6 +991,8 @@ class Manager:
                     except ValueError:
                         args = {}
                     used_tool = True
+                    if one_at_a_time and name == "claim_function":
+                        args.pop("count", None)
                     s.push("tool", f"{name}({_args_brief(args)})")
                     result = tools.call(self.net, agent, s.slug, name, args)
                     messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
@@ -1040,7 +1050,7 @@ def context_window(client, base: str, options: dict) -> int:
     return 128000
 
 
-def api_tool_schemas(fork: bool = False) -> list[dict]:
+def api_tool_schemas(fork: bool = False, single: bool = False) -> list[dict]:
     """OpenAI-style tool definitions for the built-in agent, from the same tools CLI agents get."""
     s = lambda **props: {"type": "object", "properties": props, "required": [k for k, v in props.items() if v.pop("req", False)]}
     st = lambda desc, req=False: {"type": "string", "description": desc, "req": req}
@@ -1048,9 +1058,9 @@ def api_tool_schemas(fork: bool = False) -> list[dict]:
     defs = {
         "project_info": ("Which game, compiler and progress.", s()),
         "claim_function": ("Claim the next function (or one by name/address). Returns assembly, data, best attempt, "
-                           "notes and a draft. count > 1: a batch of small functions to judge together.",
+                           "notes and a draft." + ("" if single else " count > 1: a batch of small functions to judge together."),
                            s(function=st("optional name or address"), strategy=st("finish | easiest | closest | hardest | random"),
-                             count=it("up to 6 small functions at once"))),
+                             **({} if single else {"count": it("up to 6 small functions at once")}))),
         "get_function": ("Show any function by name or address.", s(function=st("name or address", True))),
         "compile_and_diff": ("Compile C for the function, link it at its address and diff against the ROM. "
                              "Score 0 = matched. Several functions: names comma-separated, all definitions in source.",

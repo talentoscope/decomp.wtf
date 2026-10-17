@@ -18,6 +18,7 @@ import re
 import struct
 from pathlib import Path
 
+from .n64 import RomError
 from .n64code import JR_RA, _frame, _place
 
 MAX_FILE = 16 << 20
@@ -98,9 +99,12 @@ def find(disc, boot: str, platform: str, main: tuple[int, int]) -> list[tuple[st
         base_name = path.rsplit("/", 1)[-1]
         if base_name == boot_name or base_name == "SYSTEM.CNF" or not 0x400 <= size <= MAX_FILE:
             continue
-        if size > PEEK and not _code_like(disc.read(lba, PEEK), 4):  # a big file with no code where it starts
+        try:
+            if size > PEEK and not _code_like(disc.read(lba, PEEK), 4):  # a big file with no code where it starts
+                continue
+            data = disc.read(lba, size)
+        except RomError:  # an incomplete image can have files whose extents are past its end
             continue
-        data = disc.read(lba, size)
         name = re.sub(r"[^A-Za-z0-9_]", "_", Path(base_name).stem).strip("_").lower() or "overlay"
         while name in names:
             name += "_"

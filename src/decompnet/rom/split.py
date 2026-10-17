@@ -185,6 +185,30 @@ def _patch_config(path: Path) -> tuple[str, str, int]:
     return compiler, platform, int(gp.group(1), 16) if gp else 0
 
 
+def _widen_psx_code(config: Path, program: bytes, log) -> None:
+    """splat's create_config sizes a PS-X EXE's code from the first few functions it sees and files the rest as
+    data (Destruction Derby: 1 function of ~820). Stretch the code subsegment to the last `jr $ra` in the file."""
+    if program[:8] != b"PS-X EXE":
+        return
+    text = config.read_text(encoding="utf-8")
+    m = re.search(r"^(\s*- \[)(0x[0-9A-Fa-f]+)(, c, \w+\]\s*\n)(\s*- \[)(0x[0-9A-Fa-f]+)(, data,[^\]]*\][^\n]*\n)", text, re.M)
+    if not m:
+        return
+    code_start, data_start = int(m.group(2), 16), int(m.group(5), 16)
+    jr_ra = b"\x08\x00\xe0\x03"
+    last = program.rfind(jr_ra, code_start, len(program) - 8)
+    while last != -1 and last % 4:
+        last = program.rfind(jr_ra, code_start, last)
+    if last == -1:
+        return
+    end = last + 8
+    if end <= data_start + 0x1000:  # splat's guess already covers the code
+        return
+    text = text[:m.start(5)] + f"0x{end:X}" + text[m.end(5):]
+    config.write_text(text, encoding="utf-8")
+    log(f"splat only found code up to 0x{data_start:X}; the program has functions up to 0x{end:X}")
+
+
 def parse_function(path: Path, segment: str, big_endian: bool = True) -> RomFunction | None:
     """One function from a spimdisasm .s file. The 8-digit field is the instruction's bytes in file order."""
     order = "big" if big_endian else "little"
@@ -387,6 +411,8 @@ def split_rom(workdir: Path, rom_name: str = "rom.z64", log=print,
 
         toolchains.ensure("binutils-mips", log=lambda *_: None)
         objcopy = toolchains.binary("binutils-mips").parent / "mips-ps2-decompals-objcopy"
+        if sys.platform == "win32":
+            objcopy = objcopy.with_name(objcopy.name + ".exe")
         args[1:1] = ["--objcopy", str(objcopy)]
     out = _splat(args, workdir)
     configs = sorted(p for p in workdir.glob("*.yaml"))
@@ -398,8 +424,11 @@ def split_rom(workdir: Path, rom_name: str = "rom.z64", log=print,
     big_endian = platform == "n64"
     if platform == "n64":
         image = _add_code_segments(config, workdir, image, log)
-    elif overlays:
-        image = _add_overlays(config, workdir, image, overlays, log)
+    else:
+        if platform == "psx":
+            _widen_psx_code(config, (workdir / image).read_bytes(), log)
+        if overlays:
+            image = _add_overlays(config, workdir, image, overlays, log)
     log("disassembling every function")
     out += "\n" + _splat(["split", config.name], workdir)
 
