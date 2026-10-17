@@ -2002,6 +2002,12 @@ class RomNetwork(Network):
         row = self.store.one("SELECT origin FROM agents WHERE id=?", agent.id)
         return bool(row) and row["origin"] == "chat"
 
+    def release_local_claims(self) -> None:
+        """Drop the claims of this computer's own helpers (agents, permuter): their threads end with the app, so
+        nothing is working on those functions any more."""
+        with self.store.tx() as db:
+            db.execute("DELETE FROM claims WHERE agent_id IN (SELECT id FROM agents WHERE origin='local')")
+
     def local_agent(self, name: str) -> tuple[Agent, str]:
         """An agent identity for one runner on this machine (created on first use). A name an agent the user talks
         to had before 0.10.4 (chat identities were numbered like helper sessions) becomes the runner's: a helper

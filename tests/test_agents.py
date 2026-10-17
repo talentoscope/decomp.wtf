@@ -2,6 +2,7 @@
 stdin, `decomp connect`, and the compact context agents get (assembly, diffs)."""
 
 import json
+import types
 
 import pytest
 
@@ -118,12 +119,30 @@ def test_shutdown_removes_helpers_and_clears_resume_state():
     manager.sessions = {s.id: s for s in sessions}
     saved = []
     manager.persist = lambda running: saved.append(running)
+    released = []
+    manager.net = types.SimpleNamespace(permuter=types.SimpleNamespace(jobs={"demo": 1}, stop=released.append),
+                                        release_local_claims=lambda: released.append("claims"))
 
     manager.shutdown()
 
     assert manager.sessions == {}
     assert all(s.stop.is_set() and s.state == "stopped" for s in sessions)
-    assert saved == [[]]
+    assert saved == [[]] and released == ["demo", "claims"]
+
+
+def test_release_local_claims_keeps_other_agents(tmp_path):
+    from decompnet.app.engine import RomNetwork
+
+    net = RomNetwork(tmp_path / "t.db", tmp_path)
+    helper, _ = net.local_agent("api-1")
+    other = net.authenticate(net.register_agent("someone", "them", origin="web"))
+    with net.store.tx() as db:
+        db.execute("INSERT INTO claims VALUES(1,?,0,9e9)", (helper.id,))
+        db.execute("INSERT INTO claims VALUES(2,?,0,9e9)", (other.id,))
+
+    net.release_local_claims()
+
+    assert [r["function_id"] for r in net.store.all("SELECT function_id FROM claims")] == [2]
 
 
 def test_connect_antigravity(tmp_path, monkeypatch):

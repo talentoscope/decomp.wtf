@@ -627,6 +627,9 @@ class Manager:
         self.stop()
         self.sessions.clear()
         self.persist([])
+        for slug in list(self.net.permuter.jobs):
+            self.net.permuter.stop(slug)
+        self.net.release_local_claims()
 
     def remove(self, sid: str) -> None:
         self.stop(sid)

@@ -283,6 +283,8 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
     # rooms this computer belongs to reconnect (members keep their place; their agents wait while the host is away)
     net.restore_links()
 
+    net.release_local_claims()  # left behind if the app was killed
+
     # helpers that were working when the app last stopped carry on
     resume = [r for r in settings.data.get("running_agents", []) if isinstance(r, dict)]
     for r in resume:
