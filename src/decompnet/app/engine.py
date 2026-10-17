@@ -41,14 +41,15 @@ COMPILERS = {
     "gcc-2.7.2-kmc": "many third-party N64 games",
     "ido-7.1": "most later first-party N64 games",
     "ido-5.3": "early N64 games (1996-97)",
+    "gcc-2.5.7-psx": "PlayStation games (PSY-Q GCC)",
     "gcc-2.7.2-psx": "PlayStation games (PSY-Q era GCC)",
     "gcc-2.8.1-psx": "later PlayStation games",
     "ee-gcc-2.96": "PlayStation 2 games (Sony's EE GCC)",
     "agbcc": "Game Boy Advance games (pret's agbcc, GCC 2.95)",
 }
 SHORT_NAMES = {"gcc-2.7.2-kmc": "KMC GCC 2.7.2", "ido-7.1": "IDO 7.1", "ido-5.3": "IDO 5.3",
-               "gcc-2.7.2-psx": "GCC 2.7.2 (PS1)", "gcc-2.8.1-psx": "GCC 2.8.1 (PS1)", "ee-gcc-2.96": "EE-GCC 2.96",
-               "agbcc": "agbcc"}
+               "gcc-2.5.7-psx": "GCC 2.5.7 (PS1)", "gcc-2.7.2-psx": "GCC 2.7.2 (PS1)",
+               "gcc-2.8.1-psx": "GCC 2.8.1 (PS1)", "ee-gcc-2.96": "EE-GCC 2.96", "agbcc": "agbcc"}
 # CodeWarrior versions in the `mwcc` pack (GameCube, Wii) and the `mwccarm` pack (DS), for games started from scratch.
 MW_VERSIONS = {
     "gc": ["GC/1.0", "GC/1.1", "GC/1.1p1", "GC/1.2.5", "GC/1.2.5n", "GC/1.3", "GC/1.3.2", "GC/1.3.2r", "GC/2.0",
@@ -72,7 +73,8 @@ TOOLS = {
 }
 # Functions this small are handed out in batches (claim_function count): agents match most on the first try.
 BATCH_INSNS = 48
-PLATFORM_COMPILERS = {"n64": ["gcc-2.7.2-kmc", "ido-7.1", "ido-5.3"], "psx": ["gcc-2.7.2-psx", "gcc-2.8.1-psx"],
+PLATFORM_COMPILERS = {"n64": ["gcc-2.7.2-kmc", "ido-7.1", "ido-5.3"],
+                      "psx": ["gcc-2.5.7-psx", "gcc-2.7.2-psx", "gcc-2.8.1-psx"],
                       "ps2": ["ee-gcc-2.96"], "gba": ["agbcc"]}
 _AUTO_TOKEN = re.compile(r"\b(?:func|D|B|jtbl|RO|STR|FLT|DBL)_[0-9A-F]{8}\b")
 _ADDRESS = re.compile(r"^(?:0x)?([0-9A-Fa-f]{8})$")
@@ -386,6 +388,8 @@ class RomNetwork(Network):
         default_flags = tc.flags
         if picked.platform in ("psx", "ps2"):
             default_flags = [f for f in tc.flags if not f.startswith("-G")] + [f"-G{8 if res.gp else 0}"]
+            if toolchain == "gcc-2.5.7-psx":
+                default_flags = tc.flags
         cfg = {
             "kind": "rom", "platform": picked.platform, "big_endian": picked.big_endian, "gp": res.gp,
             "rom": {**info, "file": res.image or picked.filename, "program": picked.filename},

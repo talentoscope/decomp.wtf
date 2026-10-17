@@ -12,8 +12,9 @@ CPU: MIPS R3000A (MIPS I). Things that look odd at first:
   it builds the full address and the function won't match. Arrays and structs larger than the limit
   are never gp-relative.
 
-Compilers: PSY-Q SDK GCC 2.6/2.7.2/2.8.x and ASPSX versions differ in register allocation and
-instruction scheduling; the project picks them per file. Code is mostly C.
+Compilers: PSY-Q SDK GCC and ASPSX versions differ in register allocation and instruction scheduling; the project
+picks them per file. GCC 2.5.7 is available with `-O2 -G0 -mips1 -msoft-float` and maspsx in ASPSX 2.21 mode.
+Other PlayStation games may use GCC 2.6/2.7.2/2.8.x and different assembler versions. Code is mostly C.
 
 Libraries: PSY-Q's libgte, libgpu, libgs, libspu, libcd, libetc, libapi and libc are usually linked
 as library objects, not decompiled; their names and prototypes are in the project's headers.

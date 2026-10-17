@@ -83,6 +83,25 @@ url = "https://github.com/decompals/mips-binutils-2.6/releases/download/v0.3/bin
 sha256 = "ab21ad5908fb7776a4b0c596cc82f216876e3b5d108c7c7c1f33543b3f3fce4c"
 platforms = ["macos-x86_64", "macos-arm64"]
 
+["gcc-2.5.7-psx"]
+name = "GCC 2.5.7 for PlayStation + maspsx (ASPSX 2.21)"
+platform = "PS1"
+arch = "mipsel"
+license = "GPL-2.0"
+source = "decompals/old-gcc 0.17 (gcc-2.5.7-psx), decompals/mips-binutils-2.6 v0.3, mkst/maspsx"
+description = "PlayStation GCC 2.5.7 with maspsx configured to reproduce ASPSX 2.21 output."
+flags = ["-O2", "-G0", "-mips1", "-msoft-float"]
+requires = ["maspsx"]
+cmd = ["/bin/sh", "-c", "src=$1; obj=$2; inc=$3; shift 3; \"{tc}/gcc\" -B\"{tc}/\" \"$@\" -I\"$inc\" -S \"$src\" -o \"$obj.s\" && python3 \"{tc:maspsx}/maspsx.py\" --aspsx-version=2.21 --run-assembler --gnu-as-path=\"{tc}/as\" -G0 -EL -o \"$obj\" \"$obj.s\" </dev/null", "gcc-2.5.7-psx", "{src}", "{obj}", "{include}", "{flags}"]
+[["gcc-2.5.7-psx".parts]]
+url = "https://github.com/decompals/old-gcc/releases/download/0.17/gcc-2.5.7-psx.tar.gz"
+sha256 = "0db1fb403c766e51b094354b9a136a6c1f01457aa41ccca28ac457b7cb67d871"
+platforms = ["linux-x86_64"]
+[["gcc-2.5.7-psx".parts]]
+url = "https://github.com/decompals/mips-binutils-2.6/releases/download/v0.3/binutils-2.6-linux.tar.gz"
+sha256 = "5a612cd28344e5b410c3344ec5dcfb92d9d03947756f190cd12404055b4a624d"
+platforms = ["linux-x86_64"]
+
 ["gcc-2.8.1-psx"]
 name = "GCC 2.8.1 for PlayStation + binutils 2.6"
 platform = "PS1"

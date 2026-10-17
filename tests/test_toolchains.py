@@ -17,13 +17,17 @@ def tc_root(tmp_path, monkeypatch):
 
 def test_registry_is_pinned_and_labelled():
     reg = toolchains.registry()
-    assert {"gcc-2.7.2-kmc", "ee-gcc-2.96", "ido-7.1", "m2c", "runtime-i386"} <= set(reg)
+    assert {"gcc-2.5.7-psx", "gcc-2.7.2-kmc", "ee-gcc-2.96", "ido-7.1", "m2c", "runtime-i386"} <= set(reg)
     for tc in reg.values():
         assert tc.license and tc.source, tc.id
         if not tc.proprietary:  # everything we install by default is verified against a pinned hash
             assert all(p["sha256"] for p in tc.parts) or tc.commit, tc.id
     assert reg["ido-7.1"].proprietary and not reg["gcc-2.7.2-kmc"].proprietary
     assert reg["ee-gcc-2.96"].requires == ["runtime-i386"]
+    psx_257 = reg["gcc-2.5.7-psx"]
+    assert psx_257.flags == ["-O2", "-G0", "-mips1", "-msoft-float"]
+    assert psx_257.requires == ["maspsx"]
+    assert "--aspsx-version=2.21" in psx_257.cmd[2]
 
 
 def test_proprietary_toolchains_need_explicit_acceptance(tc_root):
