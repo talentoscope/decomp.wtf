@@ -26,6 +26,7 @@ log = logging.getLogger("decomp.wtf")
 NEAR = 0.06  # a near miss: at most this much of the function differs (best_score <= 6% of n_insns * 100)
 SECONDS = 60  # per function per turn
 MAX_TURNS = 4  # turns per function before it's left to agents
+NO_MUTATION_LIMIT = 64  # release the claim quickly when the source has no supported rewrites
 
 
 @dataclass
@@ -92,11 +93,11 @@ class Permuter:
                 for fn in todo:
                     if st.stop.is_set():
                         break
-                    self._turns[fn["id"]] = self._turns.get(fn["id"], 0) + 1
                     try:
                         self._permute(agent, proj, fn, st)
                     except Exception as e:  # one odd function must not stop the rest
                         log.info("permuter: %s: %s", fn["name"], e)
+                        st.current = ""
         finally:
             st.state = "stopped" if st.stop.is_set() else "done"
             st.current = ""
@@ -117,17 +118,23 @@ class Permuter:
     def _permute(self, agent, proj, fn, st: State) -> None:
         if not self._hold(agent, fn):
             return
+        self._turns[fn["id"]] = self._turns.get(fn["id"], 0) + 1
         st.current, st.tried = fn["name"], st.tried + 1
-        fork = self.net.fork_slug(proj["slug"])
-        rng = random.Random(f"{fn['id']}-{self._turns.get(fn['id'])}")
         try:
+            fork = self.net.fork_slug(proj["slug"])
+            rng = random.Random(f"{fn['id']}-{self._turns.get(fn['id'])}")
             best_src = cur_src = fn["best_source"]
             best = cur = fn["best_score"]
             deadline = time.monotonic() + SECONDS
+            no_mutations = 0
             while time.monotonic() < deadline and best > 0 and not st.stop.is_set():
                 cand = mutate(cur_src if rng.random() < 0.85 else best_src, rng)
                 if cand is None:
+                    no_mutations += 1
+                    if no_mutations >= NO_MUTATION_LIMIT:
+                        break
                     continue
+                no_mutations = 0
                 st.variants += 1
                 score = self._score(agent, proj, fn, cand, best, fork)
                 if score is None:
@@ -142,7 +149,10 @@ class Permuter:
                 if score <= cur or rng.random() < 0.02:  # mostly downhill, now and then sideways off a plateau
                     cur, cur_src = score, cand
         finally:
-            self._let_go(agent, fn)
+            try:
+                self._let_go(agent, fn)
+            finally:
+                st.current = ""
 
     def _score(self, agent, proj, fn, source: str, best: int, fork: str | None) -> int | None:
         """A variant's score; recorded (as the function's best attempt, or its match) only when it beats `best`."""

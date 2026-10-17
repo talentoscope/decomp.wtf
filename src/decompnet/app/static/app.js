@@ -2381,7 +2381,9 @@ function renderAutopilot(ov) {
   box.classList.toggle("on", !!(running || twinsRunning));
   $("apBar").hidden = !running || ap.phase === "twins";
   const perm = pm && (pm.tried || pm.state === "running")
-    ? ` The permuter ${pm.state === "running" ? `is rewriting near misses${pm.current ? ` (now ${pm.current})` : ""}` : "rewrote near misses"}: ${plural(pm.tried, "function")}, ${pm.matched} matched.` : "";
+    ? ` The permuter ${pm.state === "running" ? (pm.current
+      ? `is trying rewrites (now ${pm.current}; ${plural(pm.variants, "rewrite")} tried)`
+      : "is waiting for near misses") : "rewrote near misses"}: ${plural(pm.tried, "function")}, ${plural(pm.variants, "rewrite")} tried, ${pm.matched} matched.` : "";
   const twinsDone = (ap && ap.twins) || (tw && tw.matched) || 0;
   if (running && ap.phase === "twins") {
     $("apTitle").textContent = "Autopilot: matching code the game has more than once (twins of matched functions)";
