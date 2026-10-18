@@ -85,7 +85,8 @@ def compiler_config(root: Path, cfg: dict) -> CompilerConfig:
         cmd = list(c["cmd"])
     return CompilerConfig(
         cmd=cmd,
-        timeout=float(c.get("timeout", 15)),
+        # under WSL each compile also copies files over and starts a Linux process, so projects saved with 15-20s time out
+        timeout=max(float(c.get("timeout", 60)), 60.0) if linux else float(c.get("timeout", 20)),
         sandbox=c.get("sandbox", "auto"),
         image=c.get("image"),
         ro_paths=tuple(ro_paths),

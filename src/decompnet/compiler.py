@@ -160,6 +160,8 @@ def compile_source(cfg: CompilerConfig, context_header: str, source: str, truste
                              **({"outputs": ["func.o"], "stage": root} if _sandbox_mode(cfg) == "wsl" else {}))
         except subprocess.TimeoutExpired:
             return CompileResult(False, None, f"compiler timed out after {cfg.timeout}s")
+        except RuntimeError as e:
+            return CompileResult(False, None, str(e))
         log = (proc.stdout + proc.stderr).replace(root + "/", "")
         obj = work / "func.o"
         if proc.returncode != 0 or not obj.exists():

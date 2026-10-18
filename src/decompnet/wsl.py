@@ -143,6 +143,29 @@ def _mirror(argv: list[str]) -> tuple[list[str], list[str]]:
     return out, lines
 
 
+_PREP_LOCK = threading.Lock()
+
+
+def _prepare(lines: list[str]) -> None:
+    """Copy the toolchains in WSL's own file system, on their own long timeout and one at a time. Copying a big one
+    (Arm GNU, thousands of files over the Windows drive) takes minutes: inside a compile's few seconds it was killed
+    half way, and the next compile deleted the half copy while the first cp still ran, failing with cp errors."""
+    if not lines:
+        return
+    fd, script = tempfile.mkstemp(prefix="decomp-wsl-", suffix=".sh")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(("\n".join([*lines, "exit 0", ""])).encode())
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        with _PREP_LOCK:
+            res = subprocess.run([exe() or "wsl", "-e", "sh", path(script)], capture_output=True, timeout=1800,
+                                 stdin=subprocess.DEVNULL, creationflags=flags)
+    finally:
+        os.unlink(script)
+    if res.returncode != 0:
+        raise RuntimeError("couldn't copy the toolchain into WSL: " + _text(res.stderr + res.stdout)[-1500:])
+
+
 def _reap(stage: str, flags: int) -> None:
     pattern = "[" + stage[0] + "]" + stage[1:]  # so the pattern doesn't match this very command
     try:
@@ -163,6 +186,8 @@ def run(argv: list[str], cwd: Path, timeout: float, *, outputs: list[str] | None
     up there fails with "Value too large for defined data type"."""
     q, here = shlex.quote, path(cwd)
     argv, prep = _mirror(argv)
+    _prepare(prep)
+    prep = []
     if outputs is None:
         body = "\n".join([*prep, f"cd {q(here)} || exit 1", f"exec {shlex.join(argv)}", ""])
     else:

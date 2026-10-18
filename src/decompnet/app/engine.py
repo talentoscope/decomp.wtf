@@ -394,7 +394,7 @@ class RomNetwork(Network):
             "kind": "rom", "platform": picked.platform, "big_endian": picked.big_endian, "gp": res.gp,
             "rom": {**info, "file": res.image or picked.filename, "program": picked.filename},
             "segments": [vars(s) for s in res.segments],
-            "compiler": {"toolchain": toolchain, "flags": flags or default_flags, "timeout": 20},
+            "compiler": {"toolchain": toolchain, "flags": flags or default_flags, "timeout": 60},
             "legal": {"basis": "personal-copy", "license": "personal use only",
                       "statement": "imported by the owner of this copy of the game, who confirmed it was legally obtained",
                       "confirmed_at": time.time()},
@@ -457,7 +457,7 @@ class RomNetwork(Network):
             "kind": "rom", "platform": "gba", "big_endian": False, "gp": 0, "arch": "thumb",
             "rom": {**info, "file": picked.filename, "program": picked.filename},
             "segments": [{"name": "rom", "rom_start": 0, "rom_end": info["size"], "vram": gba.BASE}],
-            "compiler": {"toolchain": toolchain, "flags": flags or tc.flags, "timeout": 20},
+            "compiler": {"toolchain": toolchain, "flags": flags or tc.flags, "timeout": 60},
             "legal": {"basis": "personal-copy", "license": "personal use only",
                       "statement": "imported by the owner of this copy of the game, who confirmed it was legally obtained",
                       "confirmed_at": time.time()},
@@ -1720,7 +1720,7 @@ class RomNetwork(Network):
         proj = self._project(slug)
         tc = toolchains.get(toolchain)
         cfg = self.cfg(proj)
-        cfg["compiler"] = {"toolchain": tc.id, "flags": flags or tc.flags, "timeout": 20}
+        cfg["compiler"] = {"toolchain": tc.id, "flags": flags or tc.flags, "timeout": 60}
         with self.store.tx() as db:
             db.execute("UPDATE projects SET config=? WHERE id=?", (json.dumps(cfg), proj["id"]))
             db.execute("UPDATE functions SET seed=NULL WHERE project_id=? AND status='open'", (proj["id"],))
