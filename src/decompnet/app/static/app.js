@@ -1279,7 +1279,7 @@ function cssColor(name) {
   return rgb;
 }
 function readColors() {
-  colors = { open: cssColor("--open"), tried: cssColor("--tried"), work: cssColor("--work"), match: cssColor("--match"), hi: cssColor("--match-hi"), ink: cssColor("--ink") };
+  colors = { open: cssColor("--open"), tried: cssColor("--tried"), work: cssColor("--work"), match: cssColor("--match"), hi: cssColor("--match-hi"), ink: cssColor("--ink"), stuck: cssColor("--miss") };
 }
 const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
 const rgb = (c, a = 1) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
@@ -1328,6 +1328,7 @@ function applyAttempts(attempts) {
 function cellColor(f) {
   if (f.status === "matched") return [colors.match, 1];
   if (f.status === "asm") return [colors.tried, 0.35];
+  if (f.ignored) return [colors.stuck, 1];
   if (f.best != null) return [mix(colors.tried, colors.hi, Math.pow(pctOf(f.best, f.insns) || 0, 3)), 1];
   return [colors.open, 1];
 }
@@ -1400,7 +1401,7 @@ $("map").addEventListener("mousemove", (ev) => {
   if (i < 0) { tip.hidden = true; return; }
   const f = S.map[i];
   const p = pctOf(f.best, f.insns);
-  const status = f.status === "matched" ? `matched${f.matched_by ? " by " + esc(f.matched_by) : ""}` : f.status === "working" ? `${esc(f.agent)} is on it` : f.best != null ? `best ${pctText(p)}` : "not started";
+  const status = f.status === "matched" ? `matched${f.matched_by ? " by " + esc(f.matched_by) : ""}` : f.status === "working" ? `${esc(f.agent)} is on it` : f.ignored ? "stuck: ignored until unlocked" : f.best != null ? `best ${pctText(p)}` : "not started";
   const where = S.ov && S.ov.kind === "fork" ? esc(f.unit || "") : hex8(f.vram);
   tip.innerHTML = `<b>${esc(f.name)}</b><br>${where} · ${f.insns} instructions<br>${status}`;
   tip.hidden = false;
