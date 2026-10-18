@@ -1442,6 +1442,7 @@ class RomNetwork(Network):
         state = {"state": "running", "total": len(ids), "tried": 0, "matched": 0, "near": 0, "twins": 0,
                  "phase": "twins", "no_drafts": no_drafts, "started_at": time.time(), "stop": threading.Event()}
         self.autopilots[slug] = state
+        self._save_autopilot(slug, state, running=True)  # so a run the app's exit cut short starts again next time
         threading.Thread(target=self._autopilot_run, args=(slug, ids, state, workers, try_one),
                          daemon=True, name=f"autopilot-{slug}").start()
         return state
@@ -1455,7 +1456,26 @@ class RomNetwork(Network):
         if state:
             return {k: v for k, v in state.items() if k != "stop"}
         last = self.cfg(self._project(slug)).get("autopilot")  # the last run, from before the app restarted
-        return {"state": "done", **last} if last else None
+        return {"state": "done", **{k: v for k, v in last.items() if k != "running"}} if last else None
+
+    def _save_autopilot(self, slug: str, state: dict, running: bool = False) -> None:
+        keys = ("total", "tried", "matched", "near", "twins", "started_at", "finished_at")
+        with self.store.tx() as db:
+            row = db.execute("SELECT id, config FROM projects WHERE slug=?", (slug,)).fetchone()
+            if row is None:
+                return
+            cfg = json.loads(row["config"])
+            cfg["autopilot"] = {k: state.get(k) for k in keys} | ({"running": True} if running else {})
+            db.execute("UPDATE projects SET config=? WHERE id=?", (json.dumps(cfg), row["id"]))
+
+    def resume_autopilots(self) -> None:
+        """Runs the app's exit cut short carry on."""
+        for row in self.store.all("SELECT slug, config FROM projects"):
+            try:
+                if json.loads(row["config"]).get("autopilot", {}).get("running"):
+                    self.start_autopilot(row["slug"])
+            except Exception as e:
+                logging.getLogger("decomp.wtf").info("autopilot resume %s: %s", row["slug"], e)
 
     def _autopilot_run(self, slug: str, ids: list[int], state: dict, workers: int, try_one=None) -> None:
         from concurrent.futures import ThreadPoolExecutor
@@ -1491,11 +1511,7 @@ class RomNetwork(Network):
         finally:
             state["state"] = "stopped" if state["stop"].is_set() else "done"
             state["finished_at"] = time.time()
-            with self.store.tx() as db:
-                cfg = json.loads(db.execute("SELECT config FROM projects WHERE id=?", (proj["id"],)).fetchone()["config"])
-                cfg["autopilot"] = {k: state.get(k) for k in ("total", "tried", "matched", "near", "twins", "started_at",
-                                                              "finished_at")}
-                db.execute("UPDATE projects SET config=? WHERE id=?", (json.dumps(cfg), proj["id"]))
+            self._save_autopilot(slug, state)
             drafts = state["matched"] - state.get("twins", 0)
             if drafts:  # (twins announce their own)
                 with self.store.tx() as db:

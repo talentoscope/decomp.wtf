@@ -143,6 +143,15 @@ def _mirror(argv: list[str]) -> tuple[list[str], list[str]]:
     return out, lines
 
 
+def _reap(stage: str, flags: int) -> None:
+    pattern = "[" + stage[0] + "]" + stage[1:]  # so the pattern doesn't match this very command
+    try:
+        subprocess.run([exe() or "wsl", "-e", "sh", "-c", f"pkill -9 -f {shlex.quote(pattern)}; rm -rf {shlex.quote(stage)}"],
+                       capture_output=True, timeout=15, stdin=subprocess.DEVNULL, creationflags=flags)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 def run(argv: list[str], cwd: Path, timeout: float, *, outputs: list[str] | None = None,
         inputs: list[str] | None = None, stage: str | None = None) -> subprocess.CompletedProcess:
     """Run `argv` (WSL paths) inside WSL in `cwd` (a Windows folder). The command travels as a small script in the
@@ -171,8 +180,14 @@ def run(argv: list[str], cwd: Path, timeout: float, *, outputs: list[str] | None
         with os.fdopen(fd, "wb") as f:
             f.write(body.encode())  # LF line ends, whatever the platform
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        res = subprocess.run([exe() or "wsl", "-e", "sh", path(script)], capture_output=True, timeout=timeout,
-                             stdin=subprocess.DEVNULL, creationflags=flags)
+        try:
+            res = subprocess.run([exe() or "wsl", "-e", "sh", path(script)], capture_output=True, timeout=timeout,
+                                 stdin=subprocess.DEVNULL, creationflags=flags)
+        except subprocess.TimeoutExpired:
+            # killing wsl.exe leaves the compiler running in Linux; stragglers pile up and make later compiles time out
+            if outputs is not None:
+                _reap(stage, flags)
+            raise
     finally:
         os.unlink(script)
     return subprocess.CompletedProcess(res.args, res.returncode, _text(res.stdout), _text(res.stderr))

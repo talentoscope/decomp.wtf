@@ -284,6 +284,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
     net.restore_links()
 
     net.release_local_claims()  # left behind if the app was killed
+    threading.Thread(target=net.resume_autopilots, daemon=True, name="autopilot-resume").start()
 
     # helpers that were working when the app last stopped carry on
     resume = [r for r in settings.data.get("running_agents", []) if isinstance(r, dict)]

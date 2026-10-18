@@ -22,6 +22,7 @@ M2C_TARGETS = {
     "ee-gcc-2.96": "mipsee-gcc-c",
     "ido-7.1": "mips-ido-c",
     "ido-5.3": "mips-ido-c",
+    "gcc-2.5.7-psx": "mipsel-gcc-c",
     "gcc-2.7.2-psx": "mipsel-gcc-c",
     "gcc-2.8.1-psx": "mipsel-gcc-c",
     "agbcc": "gba-gcc-c",
