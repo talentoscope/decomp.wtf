@@ -1,17 +1,3 @@
-## This project is discontinued
-
-I've decided to stop working on decomp.wtf and archive it.
-
-Over the last few days I noticed that a lot of the decompilation community, the people who made the tools and projects all of this is built on, is against AI decompiling like this. I didn't make decomp.wtf to do any harm, but I respect their opinion, and that's why I'm stopping it here.
-
-The code stays up as it is, under the MIT license. If you want to fork it and keep going with it, you can. I won't fix issues, review pull requests or make new releases anymore. If you already have it installed it keeps working, it just won't get any updates. You can still install the last version (0.10.6) with the commands under [Install](#install).
-
-If you do use it or build on it, please only use it on games you own, don't share the game code it produces, and respect the rules of the projects you work with, because many of them don't want AI-made contributions.
-
-Thanks to everyone who tried it, reported bugs and sent fixes.
-
----
-
 <p align="center">
   <a href="https://decomp.wtf">
     <picture>
@@ -312,7 +298,6 @@ the game.
 | **PlayStation 2** | Beta | ✓ disc or ELF | EE-GCC 2.96 | ✓ export | ✓ |
 | **Game Boy Advance** | Beta | ✓ ROM | agbcc | ✓ export | ✓ |
 | **Nintendo DS** | Beta | ✓ ROM (.nds) | CodeWarrior for DS 1.2 – DSi 1.6 | ✓ ds-decomp | ✓ |
-| **3DS · PSP · Switch · PC · Xbox · Xbox 360** | coming | | | | ✓ |
 
 **Recommended platforms: GameCube, Wii and Nintendo 64.** They're the most tested path from dropping in a game to a
 full decomp you can port and mod:
@@ -324,7 +309,7 @@ full decomp you can port and mod:
 - **Nintendo 64** imports are tested on Super Mario 64, GoldenEye and Perfect Dark, including code loaded later and
   code shipped compressed, and the export rebuilds the ROM byte for byte. For now the export puts every function at
   its original address: right for matching and for a port, while a mod that makes code bigger needs a shiftable
-  build, which is coming.
+  build.
 
 **Beta: PlayStation, PlayStation 2, Game Boy Advance and DS.** They work end to end and are tested on homemade
 games, much less on real ones so far. Expect rough edges, and please
@@ -349,8 +334,8 @@ and continued with any tool or agent.
 
 **C and C++.** GameCube, Wii and DS games are often C++, and decomp.wtf handles it there: code with C++ symbol
 names goes into `.cpp` files, drafts come out as C++, and agents get a guide to classes, vtables, constructors,
-inlines and name mangling. On N64, PlayStation, PS2 and GBA, functions started from scratch are written in C for
-now; C++ there (mostly PS2 games) is coming. Public decomps use whatever language the project does.
+inlines and name mangling. On N64, PlayStation, PS2 and GBA, functions started from scratch are written in C.
+Public decomps use whatever language the project does.
 
 **Proprietary compilers** (IDO, CodeWarrior, CodeWarrior for DS) are only installed after you accept that. Heavy
 tools run with a memory cap, so a runaway analysis can't take your computer down.
