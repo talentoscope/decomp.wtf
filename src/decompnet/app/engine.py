@@ -696,6 +696,15 @@ class RomNetwork(Network):
 
     # ------------------------------------------------------------------ agent tools for ROMs
 
+    def unlock_function(self, project: str | None, function: str) -> None:
+        """The user's unlock button: an ignored (stuck) function is open to agents again."""
+        if (fork := self.fork_slug(project)):
+            fn = self.forks._fn(fork, function)
+        else:
+            fn = self._function(function, project)
+        with self.store.tx() as db:
+            db.execute("UPDATE functions SET ignored=0, stalls=0 WHERE id=?", (fn["id"],))
+
     def list_functions(self, project: str | None, status: str = "open", limit: int = 40) -> str:
         if (fork := self.fork_slug(project)):
             return self.forks.list_functions(fork, status, limit)
@@ -703,13 +712,14 @@ class RomNetwork(Network):
         where = "" if status == "all" else " AND f.status=?"
         args = [proj["id"]] + ([] if status == "all" else [status])
         rows = self.store.all(
-            f"SELECT f.name, f.vram, f.n_insns, f.status, f.best_score, a.name AS claimed_by FROM functions f "
+            f"SELECT f.name, f.vram, f.n_insns, f.status, f.best_score, f.ignored, a.name AS claimed_by FROM functions f "
             f"LEFT JOIN claims c ON c.function_id=f.id LEFT JOIN agents a ON a.id=c.agent_id "
             f"WHERE f.project_id=?{where} ORDER BY f.vram LIMIT ?", *args, limit)
         if not rows:
             return f"No {status} functions."
         return "\n".join(f"- {r['name']} @0x{r['vram']:08X}: {r['n_insns']} insns, {r['status']}"
                          + (f", best score {r['best_score']}" if r["best_score"] is not None else "")
+                         + (", IGNORED (stuck; the user must unlock it)" if r["ignored"] else "")
                          + (f", claimed by {r['claimed_by']}" if r["claimed_by"] else "") for r in rows)
 
     def read_data(self, project: str | None, what: str, length: int = 64) -> str:
@@ -1018,7 +1028,7 @@ class RomNetwork(Network):
             self._expire_claims(db)
             rows = db.execute(
                 "SELECT f.* FROM functions f WHERE f.project_id=? AND f.status='open' AND f.boost >= 0 AND f.n_insns <= ? "
-                "AND f.abandons = 0 AND f.unit=? AND f.id NOT IN (SELECT function_id FROM claims) "
+                "AND f.abandons = 0 AND f.ignored = 0 AND f.unit=? AND f.id NOT IN (SELECT function_id FROM claims) "
                 "ORDER BY ABS(COALESCE(f.vram, 0) - ?), f.id LIMIT ?",
                 (proj["id"], BATCH_INSNS, first["unit"], first["vram"] or 0, n)).fetchall()
             for r in rows:
@@ -1332,7 +1342,7 @@ class RomNetwork(Network):
     def function_map(self, slug: str) -> list[dict]:
         proj = self._project(slug)
         rows = self.store.all(
-            "SELECT f.name, f.vram, f.size, f.n_insns, f.status, f.best_score, f.attempts, f.unit, f.matched_at, "
+            "SELECT f.name, f.vram, f.size, f.n_insns, f.status, f.best_score, f.attempts, f.unit, f.matched_at, f.ignored, "
             "a.name AS agent, m.name AS matched_by FROM functions f LEFT JOIN claims c ON c.function_id=f.id "
             "LEFT JOIN agents a ON a.id=c.agent_id LEFT JOIN agents m ON m.id=f.matched_agent_id "
             "WHERE f.project_id=? ORDER BY f.vram, f.unit, f.id", proj["id"])
@@ -1343,6 +1353,7 @@ class RomNetwork(Network):
         return [{"name": r["name"], "vram": r["vram"], "size": r["size"], "insns": r["n_insns"], "unit": r["unit"],
                  "status": r["status"] if r["status"] in ("matched", "asm") else "working" if (r["agent"] or key(r) in remote) else "open",
                  "best": r["best_score"], "attempts": r["attempts"], "agent": r["agent"] or remote.get(key(r)),
+                 "ignored": bool(r["ignored"]),
                  "matched_at": r["matched_at"], "matched_by": r["matched_by"]} for r in rows]
 
     def map_signature(self, slug: str) -> str:
@@ -1352,12 +1363,13 @@ class RomNetwork(Network):
         proj = self._project(slug)
         f = self.store.one("SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS hi, COALESCE(SUM(attempts), 0) AS at, "
                            "COALESCE(SUM(status='matched'), 0) AS m, COALESCE(SUM(best_score), 0) AS bs, "
+                           "COALESCE(SUM(ignored), 0) AS ig, "
                            "COALESCE(MAX(matched_at), 0) AS ma FROM functions WHERE project_id=?", proj["id"])
         c = self.store.one("SELECT COUNT(*) AS n, COALESCE(SUM(c.function_id * 31 + c.agent_id), 0) AS k FROM claims c "
                            "JOIN functions f ON f.id=c.function_id WHERE f.project_id=?", proj["id"])
         link = self.links.get(slug)
         remote = sorted(str(x.get("vram") or x.get("name")) + x.get("agent", "") for x in (link.claims if link else []))
-        return f"{f['n']}.{f['hi']}.{f['at']}.{f['m']}.{f['bs']}.{f['ma']}.{c['n']}.{c['k']}.{hash(tuple(remote)) & 0xFFFFFF}"
+        return f"{f['n']}.{f['hi']}.{f['at']}.{f['m']}.{f['bs']}.{f['ma']}.{f['ig']}.{c['n']}.{c['k']}.{hash(tuple(remote)) & 0xFFFFFF}"
 
     # ------------------------------------------------------------------ what agents spend, and steering them
 
@@ -1645,7 +1657,7 @@ class RomNetwork(Network):
             fn = self._function(fn["name"], slug)
         return {
             "name": fn["name"], "vram": fn["vram"], "rom_offset": fn["rom_offset"], "size": fn["size"],
-            "insns": fn["n_insns"], "status": fn["status"], "best": fn["best_score"],
+            "insns": fn["n_insns"], "status": fn["status"], "best": fn["best_score"], "ignored": bool(fn["ignored"]),
             "asm": self._asm_text(fn, proj),
             "source": fn["matched_source"] or fn["best_source"] or (latest["source"] if latest else None) or fn["seed"],
             "source_kind": "matched" if fn["matched_source"] else "best" if fn["best_source"] else

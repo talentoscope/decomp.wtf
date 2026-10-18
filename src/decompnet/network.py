@@ -27,6 +27,12 @@ CLAIM_TTL = 30 * 60
 # starts on something fresh instead of passing the same function back and forth. Asked for by name, it comes at once.
 RELEASE_COOLDOWN = 15 * 60
 MACHINE_AGENTS = ("autopilot", "permuter")  # decomp.wtf's own workers: their claims never mean "given up on"
+STALL_LIMIT = 5  # agent attempts on one function without a better score, then it's ignored until unlocked
+
+
+def is_ai_agent(agent) -> bool:
+    """An AI agent (not decomp.wtf's autopilot/permuter, not the person at the GUI): the only ones the stall rule counts."""
+    return agent.name not in MACHINE_AGENTS and agent.name != "you"
 # Twins first (see app/twins.py): a function whose code the game has more than once (boost: how many more times)
 # and isn't too big or given up on, best value per instruction first; its twins (boost -1) last, as they match for
 # free once it does.
@@ -272,6 +278,8 @@ class Network:
                     raise NetworkError(f"{fn['name']} is already matched; use get_function to read its source")
                 if fn["status"] == "asm":
                     raise NetworkError(f"{fn['name']} is hand-written assembly: no C compiles to it, so it's left out")
+                if fn["ignored"] and is_ai_agent(agent):
+                    raise NetworkError(self._ignored_text(fn["name"]))
                 other = db.execute("SELECT agent_id, expires_at FROM claims WHERE function_id=?", (fn["id"],)).fetchone()
                 if other is not None:
                     raise NetworkError(f"{fn['name']} is claimed by {self._agent_name(other['agent_id'])} "
@@ -281,6 +289,7 @@ class Network:
             else:
                 fn = db.execute(
                     f"""SELECT f.* FROM functions f WHERE f.project_id=? AND f.status='open'
+                        {'AND f.ignored=0' if is_ai_agent(agent) else ''}
                         AND f.id NOT IN (SELECT function_id FROM claims)
                         AND f.name NOT IN (SELECT detail FROM events WHERE project_id=? AND agent_id=? AND kind='release')
                         ORDER BY f.name IN (SELECT detail FROM events WHERE project_id=? AND kind='release'
@@ -377,6 +386,8 @@ class Network:
             self._expire_claims(db)
             claim = db.execute("SELECT agent_id FROM claims WHERE function_id=?", (fn["id"],)).fetchone()
             scratch = fn["status"] == "matched"
+            if fn["ignored"] and not scratch and is_ai_agent(agent):
+                raise NetworkError(self._ignored_text(fn["name"]))
             if not scratch:
                 if claim is None:
                     held = db.execute("SELECT 1 FROM claims WHERE agent_id=?", (agent.id,)).fetchone()
@@ -400,7 +411,7 @@ class Network:
 
         if not result.ok:
             self._record(fn, agent, None, source, ctx["version"])
-            return {"text": f"❌ COMPILE ERROR (context v{ctx['version']})\n{result.log.strip()}", "score": None, "matched": False}
+            return {"text": f"❌ COMPILE ERROR (context v{ctx['version']})\n{result.log.strip()}{self.stall_note(fn['id'], agent.id)}", "score": None, "matched": False}
 
         cand, verdict, problems = self._evaluate(fn, proj, result.obj)
         if cand is None:
@@ -442,6 +453,29 @@ class Network:
         return {"text": f"{head}\n{d.render()}{warn}{self.stall_note(fn['id'], agent.id)}", "score": d.score, "matched": False}
 
     def stall_note(self, function_id: int, agent_id: int, after: int | None = None) -> str:
+        """The agent's warning before the stall rule bites, and the notice once it has."""
+        row = self.store.one("SELECT stalls, ignored FROM functions WHERE id=?", function_id)
+        if row and row["ignored"]:
+            return ("\n\n🚫 This function is now IGNORED: it took 5 attempts in a row without a better score, so it's "
+                    "closed to agents (your claim is gone) until the user unlocks it. Call claim_function for the next one.")
+        if row and row["stalls"] == STALL_LIMIT - 1:
+            return (f"\n\n⚠️ {row['stalls']} attempts in a row without a better score. One more and this function is "
+                    "ignored (closed to agents until the user unlocks it). Make the next try count, or release_function "
+                    "now with notes.")
+        return self._stall_nudge(function_id, agent_id, after)
+
+    @staticmethod
+    def _ignored_text(name: str) -> str:
+        return (f"{name} is ignored: agents made {STALL_LIMIT} attempts in a row on it without a better score. It stays "
+                "closed until the user unlocks it in decomp.wtf. Claim a different function.")
+
+    def unlock_function(self, project: str | None, function: str) -> None:
+        """Reopen an ignored function to agents (the user's unlock button)."""
+        fn = self._function(function, project)
+        with self.store.tx() as db:
+            db.execute("UPDATE functions SET ignored=0, stalls=0 WHERE id=?", (fn["id"],))
+
+    def _stall_nudge(self, function_id: int, agent_id: int, after: int | None = None) -> str:
         """A nudge once an agent's last `after` compiles of a function didn't beat its best: functions that match
         mostly do in the first few tries, and the agent's time is better spent on the next one. Big functions get
         longer (a quarter of Mario Party 6's agent matches over 64 instructions took more than 4 compiles, and
@@ -472,6 +506,19 @@ class Network:
             db.execute("INSERT INTO attempts(function_id,agent_id,score,compiled,context_version,source,created_at,via) "
                        "VALUES(?,?,?,?,?,?,?,?)", (fn["id"], agent.id, score, compiled, ctx_version, source, now, via))
             db.execute("UPDATE functions SET attempts=attempts+1 WHERE id=?", (fn["id"],))
+            if via == "agent" and is_ai_agent(agent) and not matched:
+                row = db.execute("SELECT status, best_score FROM functions WHERE id=?", (fn["id"],)).fetchone()
+                if row["status"] == "open":
+                    # row["best_score"] is still the old best: the score update below runs after this read
+                    better = score is not None and (row["best_score"] is None or score < row["best_score"])
+                    if better:
+                        db.execute("UPDATE functions SET stalls=0 WHERE id=?", (fn["id"],))
+                    else:
+                        db.execute("UPDATE functions SET stalls=stalls+1 WHERE id=?", (fn["id"],))
+                        if db.execute("SELECT stalls FROM functions WHERE id=?", (fn["id"],)).fetchone()[0] >= STALL_LIMIT:
+                            db.execute("UPDATE functions SET ignored=1 WHERE id=?", (fn["id"],))
+                            db.execute("DELETE FROM claims WHERE function_id=?", (fn["id"],))
+                            self._event(db, fn["project_id"], agent.id, "ignored", fn["name"])
             if score is not None:
                 db.execute("UPDATE functions SET best_score=?, best_source=?, best_agent_id=? "
                            "WHERE id=? AND status='open' AND (best_score IS NULL OR best_score > ?)",
@@ -718,7 +765,7 @@ class Network:
             for table in ("claims", "attempts", "notes"):
                 db.execute(f"DELETE FROM {table} WHERE function_id=?", (fn["id"],))
             db.execute("UPDATE functions SET status='open', best_score=NULL, best_source=NULL, best_agent_id=NULL, "
-                       "matched_source=NULL, matched_agent_id=NULL, matched_at=NULL, attempts=0, abandons=0 "
+                       "matched_source=NULL, matched_agent_id=NULL, matched_at=NULL, attempts=0, abandons=0, stalls=0, ignored=0 "
                        "WHERE id=?", (fn["id"],))
 
     def revoke_agent(self, name: str, erase: bool = False) -> None:

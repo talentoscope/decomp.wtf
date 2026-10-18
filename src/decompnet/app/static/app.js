@@ -1830,7 +1830,7 @@ function fnBadge(d = S.fnDetail) {
   st.className = "badge " + (d.status === "matched" ? "matched" : working ? "working" : "");
   st.textContent = d.status === "matched" ? "matched" : permuting
     ? `permuter: ${pm.compiled} compiled, ${pm.failed} didn't${pm.lowest != null ? `, closest ${pctText(pctOf(pm.lowest, d.insns))}` : ""}`
-    : working ? `${working.agent} working` : d.best != null ? `best ${pctText(pctOf(d.best, d.insns))}` : "not started";
+    : working ? `${working.agent} working` : d.ignored ? "ignored: stuck" : d.best != null ? `best ${pctText(pctOf(d.best, d.insns))}` : "not started";
 }
 
 function showFnTab(tab) {
@@ -1866,6 +1866,14 @@ async function refreshFn(first) {
     $("fnPin").classList.toggle("on", pinned);
     $("fnPin").textContent = pinned ? "★ Next (on)" : "★ Next";
     $("fnPin").onclick = () => togglePrio(d.name, !pinned).then(() => refreshFn(false));
+    $("fnUnlock").hidden = !d.ignored;
+    $("fnUnlock").onclick = async () => {
+      try {
+        await api("/api/unlock", { method: "POST", body: { slug: S.slug, name: d.name } });
+        toast("Unlocked: agents can claim it again.");
+        refreshFn(false);
+      } catch (e) { toast(esc(e.message), "err"); }
+    };
     $("noteAdd").onclick = async () => {
       const text = $("noteText").value.trim();
       if (!text) return;
@@ -2094,9 +2102,10 @@ function renderList() {
     const best = st === "matched" ? `<span class="ok">100%</span>` : p == null ? `<span class="dim">–</span>` : pctText(p);
     const status = st === "matched" ? `<span class="st matched" title="${esc(f.matched_by ? "by " + f.matched_by : "")}">matched</span>` : st === "asm" ? `<span class="st" title="hand-written assembly: no C compiles to it">assembly</span>` : st === "working" ? `<span class="st working">${esc(f.agent || "working")}</span>`
       : st === "tried" ? `<span class="st tried">tried</span>` : `<span class="st">to do</span>`;
+    const flag = f.ignored && st !== "matched" ? ` <span class="st" title="agents gave up on it (5 attempts without improvement): open it to unlock">🚫 ignored</span>` : "";
     return `<tr data-fn="${esc(f.name)}" class="${S.fn === f.name ? "sel" : ""}" tabindex="0"><td class="mono dim">${fork ? esc(f.unit || "") : hex8(f.vram)}</td>
       <td class="mono name">${(S.ov && (S.ov.priority || []).includes(f.name)) ? `<span class="star" title="agents take it next">★</span>` : ""}${esc(f.name)}</td><td class="r mono">${f.insns.toLocaleString()}</td><td class="r mono">${best}</td>
-      <td class="r mono">${f.attempts || `<span class="dim">0</span>`}</td><td>${status}</td></tr>`;
+      <td class="r mono">${f.attempts || `<span class="dim">0</span>`}</td><td>${status}${flag}</td></tr>`;
   }).join("") || `<tr class="none"><td colspan="6">No function matches${q ? ` “${esc(L.q)}”` : ""}.</td></tr>`;
   $("fnShown").textContent = rows.length > L.limit ? `${L.limit.toLocaleString()} of ${rows.length.toLocaleString()} shown` : plural(rows.length, "function");
   $("fnMore").hidden = rows.length <= L.limit;

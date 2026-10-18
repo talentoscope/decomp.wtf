@@ -28,7 +28,7 @@ from .. import similarity, toolchains
 from ..forks import catalog, csource, datadiff, drafts, dtksplits, ghidra, scratch_dsd, scratch_dtk
 from ..forks.objdiff import ObjdiffError
 from ..forks.project import EDITABLE, STATE, ForkError, ForkProject
-from ..network import Agent, Network, NetworkError
+from ..network import Agent, Network, NetworkError, is_ai_agent
 from ..scoring import percent_text
 from ..textedit import replace_once
 
@@ -1730,10 +1730,11 @@ class ForkEngine:
         where = {"open": "status='open'", "matched": "status='matched'", "all": "1"}.get(status)
         if where is None:
             raise NetworkError("status must be open, matched or all")
-        rows = self.net.store.all(f"SELECT name, unit, n_insns, status, best_score FROM functions WHERE project_id=? "
+        rows = self.net.store.all(f"SELECT name, unit, n_insns, status, best_score, ignored FROM functions WHERE project_id=? "
                                   f"AND {where} ORDER BY n_insns LIMIT ?", proj["id"], max(1, min(int(limit), 200)))
         out = [f"{r['name']:<40} {r['unit']:<36} {r['n_insns']:>5} insns  "
                f"{'matched' if r['status'] == 'matched' else 'best ' + str(r['best_score']) if r['best_score'] is not None else 'new'}"
+               f"{'  IGNORED (stuck; the user must unlock it)' if r['ignored'] else ''}"
                for r in rows]
         return "\n".join(out) or "none"
 
@@ -1825,6 +1826,8 @@ class ForkEngine:
             claim = db.execute("SELECT agent_id FROM claims WHERE function_id=?", (fn["id"],)).fetchone()
             if claim is not None and claim["agent_id"] != agent.id:
                 raise NetworkError(f"{fn['name']} is claimed by {self.net._agent_name(claim['agent_id'])}")
+            if fn["ignored"] and fn["status"] != "matched" and is_ai_agent(agent):
+                raise NetworkError(self.net._ignored_text(fn["name"]))
             now = time.time()
             if claim is None and fn["status"] != "matched":
                 db.execute("INSERT INTO claims VALUES(?,?,?,?)", (fn["id"], agent.id, now, now + self.net.claim_ttl))
@@ -1872,7 +1875,8 @@ class ForkEngine:
                     self.net._record(fn, agent, None, code, 0)
                 why = "" if builds else ("\n(The file didn't build before your change either, so the error may be in "
                                          "other code of the file: fix that with edit_file.)")
-                return {"text": f"❌ BUILD ERROR (your change was undone){why}\n{log[-3000:]}", "score": None,
+                return {"text": f"❌ BUILD ERROR (your change was undone){why}\n{log[-3000:]}"
+                                f"{self.net.stall_note(fn['id'], agent.id)}", "score": None,
                         "matched": False}
             try:
                 d = fp.diff(unit, symbol)
@@ -2389,7 +2393,7 @@ class ForkEngine:
         notes = self.net.store.all("SELECT n.text, n.created_at, a.name AS agent FROM notes n LEFT JOIN agents a "
                                    "ON a.id=n.agent_id WHERE n.function_id=? ORDER BY n.id DESC LIMIT 10", fn["id"])
         return {"name": fn["name"], "vram": fn["vram"] or 0, "rom_offset": 0, "size": fn["size"], "insns": fn["n_insns"],
-                "status": fn["status"], "best": fn["best_score"], "asm": asm, "unit": fn["unit"],
+                "status": fn["status"], "best": fn["best_score"], "ignored": bool(fn["ignored"]), "asm": asm, "unit": fn["unit"],
                 "source": current or fn["best_source"], "source_kind": "matched" if fn["status"] == "matched" else
                 ("latest" if current else "best" if fn["best_source"] else None),
                 "match_percent": pct, "scores": [{"score": a["score"], "t": a["created_at"], "agent": a["agent"]} for a in attempts],

@@ -60,7 +60,8 @@ You are a decompilation agent in decomp.wtf, working on {title}. Other agents ma
 functions of the same game at the same time; the tools keep you from colliding.
 
 Your job: turn functions of this game into C that compiles to *exactly* the original machine code.
-Use only the decomp tools. Repeat for up to {count} claims (a batch is one), then stop:
+Use only the decomp tools. Repeat until you have claimed {count} times (claim_function(count=4) is ONE
+claim), then stop:
 
 1. claim_function(count=4) gives you the next function, and when it's small, its neighbours with it (small
    functions mostly match on the first try): assembly, location, calls, data it uses, the best previous
@@ -76,6 +77,9 @@ Use only the decomp tools. Repeat for up to {count} claims (a batch is one), the
    function) for a compiler quirk or convention every agent here should know: the next sessions start with it.
 5. compile_and_diff says when to move on (no better after 4 compiles in a row; up to 10 for big functions):
    then release_function with precise notes (what you tried, what is left) and claim the next one.
+   Hard limit: 5 compiles in a row on one function without a better score and it is IGNORED: closed to
+   agents (your claim is dropped) until the user unlocks it. You get a warning at 4. Release with notes
+   before that; compile errors count too, so don't burn tries on guesses.
 
 Write plausible original code, pure C (no inline asm). Be brief in your messages: work, don't narrate.
 """
@@ -86,7 +90,8 @@ for {platform}. Other agents may be working on other functions of the same proje
 tools keep you from colliding.
 
 Your job: write functions in the project's own source files so they compile to *exactly* the original
-machine code, judged by objdiff. Use only the decomp tools. Repeat for up to {count} claims (a batch is one), then stop:
+machine code, judged by objdiff. Use only the decomp tools. Repeat until you have claimed {count} times
+(claim_function(count=4) is ONE claim), then stop:
 
 1. claim_function(count=4) gives you the next function, and when it's small, its neighbours in the same
    file (small functions mostly match on the first try): target assembly, the current diff, its source
@@ -109,6 +114,9 @@ machine code, judged by objdiff. Use only the decomp tools. Repeat for up to {co
 6. compile_and_diff says when to move on (no better after 4 compiles in a row; up to 10 for big functions):
    then release_function with precise notes (what you tried, what is left) and claim the next. Very large
    functions: get the structure right first; a near miss is worth the extra compiles.
+   Hard limit: 5 compiles in a row on one function without a better score and it is IGNORED: closed to
+   agents (your claim is dropped) until the user unlocks it. You get a warning at 4. Release with notes
+   (add_note) before that; compile errors count too, so don't burn tries on guesses.
 
 Rules: C/C++ only (no inline asm, asm functions or asm includes); don't touch targets, configs or build
 scripts (the tools refuse). Write code a human would have written: match the file's style and names.

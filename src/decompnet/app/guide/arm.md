@@ -18,6 +18,9 @@ Recognising C
 - No hardware divide on ARM7/ARM9: `/` and `%` call `__divsi3`/`__modsi3` (GBA games may use the BIOS
   `swi 6`). The DS has a divider in I/O registers (0x04000280) used through SDK functions.
 - `bl` calls; `bx`/`blx` switch between ARM and Thumb (ARMv5 has `blx`).
+- A call in the diff can read `bl func-0x8` (or `+0x8`-style offsets on other relocs): that's the usual ARM
+  relocation addend (the PC reads 8 bytes ahead), not part of the name. Call the plain function; if the
+  diff still disagrees there, the callee is declared differently or the call is a different branch kind.
 
 Hardware registers: GBA I/O at 0x04000000 (REG_DISPCNT...), DS I/O at 0x04000000 too; the project's
 headers have names and macros for them: use those.

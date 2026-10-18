@@ -624,6 +624,10 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         net.set_instructions(slug, str(data.get("text", "")))
         return net.overview(slug)
 
+    def p_unlock(slug, request, data):
+        net.unlock_function(slug, str(data.get("name", "")))
+        return {"ok": True}
+
     def p_priority(slug, request, data):
         return {"priority": net.set_priority(slug, str(data.get("name", "")), bool(data.get("on", True)))}
 
@@ -652,7 +656,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         "/api/delete": (p_delete, ["POST"]), "/api/agents/manual": (p_manual, ["POST"]),
         "/api/try": (p_try, ["POST"]), "/api/release": (p_release, ["POST"]),
         "/api/autopilot": (p_autopilot, ["POST"]), "/api/instructions": (p_instructions, ["POST"]),
-        "/api/priority": (p_priority, ["POST"]), "/api/note": (p_note, ["POST"]),
+        "/api/priority": (p_priority, ["POST"]), "/api/unlock": (p_unlock, ["POST"]), "/api/note": (p_note, ["POST"]),
         "/api/stats": (lambda s, r, d: net.stats(s), ["GET"]),
     }
     for path, (fn, methods) in routes.items():

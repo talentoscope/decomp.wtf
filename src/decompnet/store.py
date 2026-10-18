@@ -56,6 +56,8 @@ MIGRATIONS = [
     ("agents", "terms_accepted_at", "REAL"),                   # evidence of accepting the terms
     ("functions", "fingerprint", "TEXT"),                      # one-way match fingerprint (hash-only projects)
     ("attempts", "via", "TEXT"),                               # agent | permuter
+    ("functions", "stalls", "INTEGER NOT NULL DEFAULT 0"),     # agent attempts since the last improvement
+    ("functions", "ignored", "INTEGER NOT NULL DEFAULT 0"),    # agents gave it up: closed to them until unlocked
     ("functions", "unit", "TEXT NOT NULL DEFAULT ''"),         # source file (translation unit) it came from
     ("context_versions", "unit", "TEXT NOT NULL DEFAULT ''"),  # '' = project-wide header, else per-unit header
     ("functions", "vram", "INTEGER"),                          # ROM projects: load address of the function

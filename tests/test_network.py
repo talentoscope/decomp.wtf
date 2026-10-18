@@ -253,3 +253,30 @@ def test_big_functions_get_more_compiles_before_the_nudge_to_move_on(net, agents
     with net.store.tx() as db:
         db.execute("UPDATE functions SET n_insns=300 WHERE id=?", (fn["id"],))
     assert net.stall_note(fn["id"], alice.id) == ""  # a big one: not before 10
+
+
+def test_agent_stalled_five_times_ignores_the_function_until_unlocked(net, agents):
+    alice, bob = agents
+    fn = net.store.one("SELECT * FROM functions WHERE name='clamp_s32'")
+    net.claim(alice, "demo", "clamp_s32")
+    for score in (50, 40, 40, 45, 41, 40):  # 40 is a repeat: 4 non-improving tries after the last improvement
+        net._record(fn, alice, score, "x", 1)
+    assert not net.store.one("SELECT ignored FROM functions WHERE id=?", fn["id"])["ignored"]
+    net._record(fn, alice, 42, "x", 1)  # the 5th in a row
+    row = net.store.one("SELECT ignored, stalls FROM functions WHERE id=?", fn["id"])
+    assert row["ignored"] and row["stalls"] == 5
+    assert net.store.one("SELECT 1 FROM claims WHERE function_id=?", fn["id"]) is None
+    with pytest.raises(NetworkError, match="ignored"):
+        net.claim(bob, "demo", "clamp_s32")
+    assert "clamp_s32" not in net.claim(bob, "demo")  # automatic claims skip it
+    net.unlock_function("demo", "clamp_s32")
+    assert not net.store.one("SELECT ignored FROM functions WHERE id=?", fn["id"])["ignored"]
+
+
+def test_machine_workers_never_trigger_the_ignore_rule(net):
+    fn = net.store.one("SELECT * FROM functions WHERE name='clamp_s32'")
+    for name in ("autopilot", "permuter"):
+        agent = net.authenticate(net.register_agent(name, name))
+        for _ in range(8):
+            net._record(fn, agent, 99, "x", 1, via="permuter" if name == "permuter" else "agent")
+    assert not net.store.one("SELECT ignored FROM functions WHERE id=?", fn["id"])["ignored"]
