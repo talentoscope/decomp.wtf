@@ -951,7 +951,9 @@ class Manager:
         messages = [{"role": "system", "content": tools.INSTRUCTIONS},
                     {"role": "user", "content": task}]
         used_tool = False
-        with httpx.Client(timeout=httpx.Timeout(300, connect=15)) as client:
+        # a local reasoning model can think for many minutes before it answers; a timeout throws the session away
+        wait = int(s.options.get("request_timeout") or (1800 if one_at_a_time else 300))
+        with httpx.Client(timeout=httpx.Timeout(wait, connect=15)) as client:
             window = context_window(client, base, s.options)
             s.push("info", f"session {s.runs}: {model} via {base} ({window // 1000}K tokens of context)")
             budget = int(window * 0.7) - _tokens(schema)  # room for the reply and the tools' definitions
