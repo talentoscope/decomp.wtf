@@ -30,6 +30,44 @@ def test_an_overlay_is_placed_at_its_load_address():
     assert overlays.place(data, "psx", [(0x800F0000, 0x80120000)]) is None  # over the resident program: no
 
 
+def test_a_function_reads_its_own_overlay_and_shared_non_overlapping_segments(tmp_path):
+    from decompnet.app.engine import RomNetwork
+
+    net = RomNetwork(tmp_path / "app.db", tmp_path)
+    net._roms[1] = (bytes(range(16)), [
+        split.Segment("main", 0, 4, 0x80180000),
+        split.Segment("ovl_battle", 4, 8, 0x80180000),
+        split.Segment("ovl_field", 8, 12, 0x80180000),
+        split.Segment("shared", 12, 16, 0x80190000),
+    ])
+    proj = {"id": 1}
+    fn = {"name": "ovl_battle_func", "rom_offset": 4}
+    read = net.reader(proj, fn)
+
+    assert read(0x80180000, 4) == bytes(range(4, 8))
+    assert read(0x80190000, 4) == bytes(range(12, 16))
+
+
+def test_export_symbols_pin_functions_to_their_rom_offsets():
+    from types import SimpleNamespace
+
+    from decompnet.rom.export import _symbol_lines
+
+    rows = [
+        {"name": "ovl_battle_func", "vram": 0x80180000, "rom_offset": 0x100},
+        {"name": "ovl_field_func", "vram": 0x80180000, "rom_offset": 0x200},
+    ]
+    net = SimpleNamespace(
+        store=SimpleNamespace(all=lambda *_: rows),
+        symbols=lambda _: SimpleNamespace(by_name={}),
+    )
+
+    assert _symbol_lines(net, {"id": 1}) == [
+        "ovl_battle_func = 0x80180000; // type:func rom:0x100",
+        "ovl_field_func = 0x80180000; // type:func rom:0x200",
+    ]
+
+
 def test_ps2_elf_overlays_say_where_they_go():
     code = _overlay(0x00400000, 40)
     phoff = 52

@@ -22,10 +22,17 @@ _OBJ_ENTRY = re.compile(r'\bObject\(\s*(NonMatching|Matching|Equivalent|Matching
 
 
 @dataclass
+class SectionSplit:
+    name: str
+    start: int
+    end: int
+    extra: str = ""  # anything after a range (align:, rename:...), kept as is
+
+
+@dataclass
 class FileSplit:
     name: str  # path relative to the source directory, as splits.txt names it
-    sections: dict[str, tuple[int, int]] = field(default_factory=dict)  # ".text" -> (start, end)
-    extra: dict[str, str] = field(default_factory=dict)  # anything after a range (align:, rename:...), kept as is
+    sections: list[SectionSplit] = field(default_factory=list)
     attrs: list[str] = field(default_factory=list)  # other lines of the entry (comment:, ...)
 
 
@@ -51,9 +58,8 @@ class Splits:
                 continue
             r = _RANGE.match(line)
             if r:
-                cur.sections[r.group(1)] = (int(r.group(2), 16), int(r.group(3), 16))
-                if r.group(4).strip():
-                    cur.extra[r.group(1)] = r.group(4).strip()
+                cur.sections.append(SectionSplit(r.group(1), int(r.group(2), 16), int(r.group(3), 16),
+                                                 r.group(4).strip()))
             elif line.strip():
                 cur.attrs.append(line)
         while header and not header[-1].strip():
@@ -65,16 +71,15 @@ class Splits:
         for f in self.files:
             out.append(f"{f.name}:")
             out += f.attrs
-            for sec, (start, end) in f.sections.items():
-                tail = f" {f.extra[sec]}" if sec in f.extra else ""
-                out.append(f"\t{sec:<11} start:0x{start:08X} end:0x{end:08X}{tail}")
+            for sec in f.sections:
+                tail = f" {sec.extra}" if sec.extra else ""
+                out.append(f"\t{sec.name:<11} start:0x{sec.start:08X} end:0x{sec.end:08X}{tail}")
             out.append("")
         return "\n".join(out)
 
     def owner(self, section: str, address: int) -> FileSplit | None:
         for f in self.files:
-            lo, hi = f.sections.get(section, (0, 0))
-            if lo <= address < hi:
+            if any(s.name == section and s.start <= address < s.end for s in f.sections):
                 return f
         return None
 

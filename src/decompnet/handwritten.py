@@ -238,3 +238,64 @@ def mips_reason(code: bytes, big_endian: bool, platform: str = "") -> str | None
                 return f"reads {name} before setting it: compiled code gets its arguments in {args}"
             return None
     return None
+
+
+def sm83_reason(code: bytes, base: int = 0, capped: bool = False) -> str | None:
+    """Basic SM83 split heuristic: identify padding and bodies that run into the next label."""
+    from .rom import sm83
+
+    if not code:
+        return None
+    if all(b in (0x00, 0xFF) for b in code):
+        return "padding (00 or FF bytes only), not a function"
+    if capped:
+        return "the split ran to its size limit without reaching a return"
+    insns = list(sm83.disassemble(code, base))
+    if insns and not sm83.is_return(insns[-1][1]):
+        return "runs on into the next function (it ends without a return or a jump)"
+    return None
+
+
+def sm83_routine(code: bytes, base: int = 0) -> int | None:
+    """Find the end of a routine when a terminal control-flow path leaves trailing unreachable bytes."""
+    from .rom import sm83
+
+    insns = {addr - base: (text, size) for addr, text, size in sm83.disassemble(code, base)}
+    if not insns or 0 not in insns:
+        return None
+    pending, reached = [0], set()
+    terminal = False
+    while pending:
+        off = pending.pop()
+        if off in reached:
+            continue
+        instruction = insns.get(off)
+        if instruction is None:
+            return None
+        reached.add(off)
+        text, size = instruction
+        end = off + size
+        kind, target = sm83.flow(text)
+        nexts = []
+        if kind in ("ret", "jump"):
+            terminal = True
+            if kind == "jump" and target is not None:
+                local = target - base
+                if 0 <= local < len(code):
+                    nexts.append(local)
+        else:
+            if kind in ("cjump", "cret"):
+                terminal = True
+            if kind == "cjump" and target is not None:
+                local = target - base
+                if 0 <= local < len(code):
+                    nexts.append(local)
+                else:
+                    terminal = True
+            if end < len(code):
+                nexts.append(end)
+            elif kind not in ("ret", "jump"):
+                return None
+        pending.extend(nexts)
+    end = max(off + insns[off][1] for off in reached)
+    return end if terminal and end < len(code) else None

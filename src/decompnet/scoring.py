@@ -61,8 +61,13 @@ def percent_text(p: float | None) -> str:
 
 
 def disassemble(fn: FunctionObj) -> list[Insn]:
-    arch, mode = _CS[(fn.arch, fn.big_endian)]
-    md = capstone.Cs(arch, mode)
+    if fn.arch == "sm83" and not fn.big_endian:
+        from .rom import sm83
+
+        md = sm83.Decoder()
+    else:
+        arch, mode = _CS[(fn.arch, fn.big_endian)]
+        md = capstone.Cs(arch, mode)
     md.detail = True
     md.skipdata = True
     code = mask_relocs(fn.code, fn.relocs, fn.arch, fn.big_endian)
