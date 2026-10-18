@@ -7,11 +7,11 @@ from dataclasses import dataclass, field
 import struct
 from pathlib import Path
 
-from . import chd, gba, gb, n64, overlays, ps2, psx
+from . import chd, gba, gb, n64, overlays, ps2, psx, sms
 from .n64 import RomError
 
 PLATFORMS = {"n64": "Nintendo 64", "psx": "PlayStation", "ps2": "PlayStation 2", "gba": "Game Boy Advance",
-             "gb": "Game Boy", "gbc": "Game Boy Color"}
+             "gb": "Game Boy", "gbc": "Game Boy Color", "sms": "Sega Master System", "gg": "Sega Game Gear"}
 SMALL = 64 * 1024 * 1024  # ROMs and programs are read whole; disc images are read from disk
 
 
@@ -32,6 +32,12 @@ def _program(data: bytes, name: str = "") -> Picked | None:
         info = gb.read_info(data)
         ext = ".gbc" if info["platform"] == "gbc" else ".gb"
         return Picked(info["platform"], data, f"rom{ext}", info, False)
+    sega_platform = sms.platform_of(sms.strip_copier_header(data), name)
+    if sega_platform:
+        data = sms.strip_copier_header(data)
+        info = sms.read_info(data, name)
+        ext = ".gg" if sega_platform == "gg" else ".sms"
+        return Picked(sega_platform, data, f"rom{ext}", info, False)
     if data[:4] in n64.MAGIC:
         rom, info = n64.read_info(data)
         return Picked("n64", rom, "rom.z64", info.to_dict() | {"platform": "n64", "gp": 0}, True)
@@ -70,7 +76,8 @@ def identify(src: bytes | Path, name: str = "") -> Picked:
     if src[:4] == b"\x7fELF":
         raise RomError("this ELF program isn't for a console decomp.wtf can split from scratch yet")
     raise RomError("this isn't a ROM, disc or game program this app can read: pick an N64 ROM (.z64, .n64, .v64), "
-                   "a Game Boy ROM (.gb, .gbc), a PlayStation 1 or 2 disc image (.bin, .iso, .chd) "
+                   "a Game Boy ROM (.gb, .gbc), a Master System or Game Gear ROM (.sms, .gg), "
+                   "a PlayStation 1 or 2 disc image (.bin, .iso, .chd) "
                    "or its program file (e.g. SLUS_200.00)")
 
 

@@ -380,12 +380,12 @@ sha256 = "bcf0197e3e27d8e08506a142e25fa68ea7f6679a98347a6406804eb3f9ff4d29"
 platforms = ["linux-x86_64"]
 
 ["gbdk-2020"]
-name = "GBDK-2020 (SDCC for the Game Boy)"
-platform = "Game Boy / Game Boy Color"
+name = "GBDK-2020 (SDCC for 8-bit consoles)"
+platform = "Game Boy / Game Boy Color / Master System / Game Gear"
 arch = "sm83"
 license = "MIT (GBDK-2020) + GPL-2.0 (SDCC)"
 source = "gbdk-2020/gbdk-2020 4.5.0"
-description = "Pinned SDCC 4.5.1 and assemblers for byte-exact Game Boy C matching."
+description = "Pinned SDCC 4.5.1 and assemblers for byte-exact Game Boy, Master System and Game Gear C matching."
 cc = ["{tc}/gbdk/bin/sdcc", "-msm83", "-c", "-I{include}"]
 flags = ["--fsigned-char"]
 [["gbdk-2020".parts]]
@@ -588,3 +588,37 @@ description = "Game Boy Advance disassembler: finds the functions in a ROM and w
 git = "https://github.com/aarant/luvdis"
 commit = "ec3a4e3ee3afe3e9b4a9c7ae8fffc65e1ea2096c"
 pip_extra = ["setuptools<70"]
+
+["wla-dx"]
+name = "WLA-DX (wla-z80, wlalink)"
+kind = "tool"
+platform = "Master System / Game Gear"
+arch = "z80"
+license = "GPL-2.0-or-later"
+source = "vhelin/wla-dx v10.7"
+description = "The Z80 assembler and linker used to judge documented Master System / Game Gear assembly and rebuild exported projects."
+[[wla-dx.parts]]
+url = "https://github.com/vhelin/wla-dx/archive/refs/tags/v10.7.tar.gz"
+sha256 = "38296a96bc20be873d17e0e88be0c5b20a15ef2ec4da5279600e56af30ad925a"
+subdir = "wla-dx-10.7"
+platforms = ["linux-x86_64", "linux-aarch64", "macos-x86_64", "macos-arm64"]
+[[wla-dx.parts]]
+url = "https://github.com/vhelin/wla-dx/releases/download/v10.7/wla_dx_v10.7_Win64.zip"
+sha256 = "82922a530ae989bd5f8057fa4cfef3d0022d7353b5aeb7858b9320eae9b56ebd"
+subdir = "wla_dx_v10.7_Win64"
+platforms = ["windows-x86_64"]
+["wla-dx".binaries]
+windows-x86_64 = ["wla-z80.exe", "wlalink.exe"]
+linux-x86_64 = ["build/binaries/wla-z80", "build/binaries/wlalink"]
+linux-aarch64 = ["build/binaries/wla-z80", "build/binaries/wlalink"]
+macos-x86_64 = ["build/binaries/wla-z80", "build/binaries/wlalink"]
+macos-arm64 = ["build/binaries/wla-z80", "build/binaries/wlalink"]
+["wla-dx".build]
+linux-x86_64 = [["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"],
+                ["cmake", "--build", "build", "--target", "wla-z80", "wlalink", "--parallel", "4"]]
+linux-aarch64 = [["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"],
+                 ["cmake", "--build", "build", "--target", "wla-z80", "wlalink", "--parallel", "4"]]
+macos-x86_64 = [["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"],
+                ["cmake", "--build", "build", "--target", "wla-z80", "wlalink", "--parallel", "4"]]
+macos-arm64 = [["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"],
+               ["cmake", "--build", "build", "--target", "wla-z80", "wlalink", "--parallel", "4"]]

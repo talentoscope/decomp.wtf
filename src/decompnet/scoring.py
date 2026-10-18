@@ -65,6 +65,10 @@ def disassemble(fn: FunctionObj) -> list[Insn]:
         from .rom import sm83
 
         md = sm83.Decoder()
+    elif fn.arch == "z80" and not fn.big_endian:
+        from .rom import z80
+
+        md = z80.Decoder()
     else:
         arch, mode = _CS[(fn.arch, fn.big_endian)]
         md = capstone.Cs(arch, mode)

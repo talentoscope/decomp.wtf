@@ -54,6 +54,8 @@ class Toolchain:
     git: str = ""
     commit: str = ""
     binary_name: str = ""  # main executable of a tool, without .exe
+    build: dict = field(default_factory=dict)
+    binaries: dict = field(default_factory=dict)
     pip_extra: list[str] = field(default_factory=list)  # extra requirements for a git tool's environment
     requires_java: int = 0  # minimum Java version (Ghidra)
 
@@ -299,6 +301,15 @@ def install(tid: str, *, accept_license: bool = False, force: bool = False, log=
                         if f.is_file():
                             os.chmod(f, 0o755)
             pinned.append({"url": part["url"], "sha256": digest})
+        for command in tc.build.get(current_platform(), []):
+            try:
+                subprocess.run(command, cwd=dest, check=True, capture_output=True, text=True, timeout=900)
+            except (OSError, subprocess.SubprocessError) as e:
+                detail = ((getattr(e, "stdout", "") or "") + (getattr(e, "stderr", "") or "")).strip()
+                raise ToolchainError(f"couldn't build {tc.name}: {e}" + (f"\n{detail[-2000:]}" if detail else "")) from e
+        missing = [binary for binary in tc.binaries.get(current_platform(), []) if not (dest / binary).is_file()]
+        if missing:
+            raise ToolchainError(f"{tc.name} install is missing its executable(s): {', '.join(missing)}")
         if linux and "runtime-i386" in tc.requires:  # WSL systems rarely have a 32-bit loader: bring ours
             n = wsl.wrap_i386(dest, wsl.path(path("runtime-i386", linux=True)))
             log(f"  {n} 32-bit programs start through the pinned 32-bit runtime")

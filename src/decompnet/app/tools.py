@@ -35,6 +35,7 @@ GUIDES = {
     "arm": "ARM and Thumb (GBA, DS, 3DS): registers, conditional code, literal pools",
     "agbcc": "matching Game Boy Advance code built with agbcc",
     "gb": "Game Boy and Game Boy Color cartridges, banked ROM addresses, SM83 and GBDK-2020",
+    "sms": "Master System and Game Gear cartridges, Sega bank mapping, Z80 / SDCC matching and WLA-DX assembly",
     "x86": "x86 and MSVC (PC, Xbox): calling conventions, SEH, matching MSVC output",
     "aarch64": "AArch64 and Clang (Switch): registers, matching Clang output",
     "similarity": "finding similar functions and reusing matched code",
@@ -45,7 +46,7 @@ PLATFORM_GUIDES = {
     "n64": ["mips"], "ps": ["mips", "psx"], "ps2": ["mips", "ps2"], "psp": ["mips"],
     "gc": ["ppc", "mwcc", "cpp"], "wii": ["ppc", "mwcc", "cpp"], "nds": ["arm", "mwcc"], "3ds": ["arm", "cpp"],
     "gba": ["arm", "agbcc"], "switch": ["aarch64", "cpp"], "win32": ["x86", "cpp"], "xbox": ["x86", "cpp"],
-    "xbox360": ["ppc", "cpp"], "gb": ["gb"], "gbc": ["gb"],
+    "xbox360": ["ppc", "cpp"],     "gb": ["gb"], "gbc": ["gb"], "sms": ["sms"], "gg": ["sms"],
 }
 
 INSTRUCTIONS = """\

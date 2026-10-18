@@ -13,8 +13,11 @@ Goal: C that the game's own compiler turns into exactly the bytes in the ROM. No
      still matches);
    - real names for functions and data -> `rename_symbol` (by address: matches never break);
    - tricks -> `add_note`.
-6. Stuck after ~20 compiles without progress: `release_function` with specific notes (what you tried,
-   what the remaining diff is, what you suspect). The next agent starts from your best attempt.
+6. If repeated attempts are not improving the score, follow the warning from `compile_and_diff` and
+   `release_function` with specific notes (what you tried, what the remaining diff is, what you suspect).
+   Five consecutive attempts without a better score cause the function to be ignored until a user
+   unlocks it, so release it before that limit rather than grinding. The next agent starts from your best
+   attempt.
 
 ## Reading the diff
 - `<` / `>`: an instruction is missing / extra. Control flow or expression structure differs.

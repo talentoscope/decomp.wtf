@@ -252,7 +252,7 @@ function parseRom(buf) {
 /* What the user dropped, from its first bytes (nothing is uploaded until they confirm). */
 const PLATFORM_NAME = { n64: "Nintendo 64", psx: "PlayStation", ps2: "PlayStation 2", playstation: "PlayStation 1 or 2",
   gc: "GameCube", wii: "Wii", gcwii: "GameCube or Wii", gba: "Game Boy Advance",
-  gb: "Game Boy", gbc: "Game Boy Color", nds: "Nintendo DS" };
+  gb: "Game Boy", gbc: "Game Boy Color", sms: "Sega Master System", gg: "Sega Game Gear", nds: "Nintendo DS" };
 const GB_LOGO = "CEED6666CC0D000B03730083000C000D0008111F8889000EDCCC6EE6DDDDD999BBBB67636E0EECCCDDDC999FBBB9333E"
   .match(/../g).map((b) => Number.parseInt(b, 16));
 const CW_PACK = {
@@ -291,6 +291,26 @@ function identifyHead(head, file) {
       return { ...base, platform, order: "Banked ROM", title: ascii(0x134, 0x144) || stem };
     }
   }
+  const copier = file.size % 0x4000 === 0x200;
+  const romSize = file.size - (copier ? 0x200 : 0);
+  if (romSize >= 0x2000 && romSize <= 0x400000 && romSize % 0x2000 === 0) {
+    const header = romSize >= 0x8000 ? 0x7ff0 : romSize >= 0x4000 ? 0x3ff0 : 0x1ff0;
+    const at = header + (copier ? 0x200 : 0);
+    const magic = text(at, at + 8) === "TMR SEGA";
+    const region = magic ? head[at + 0xf] >>> 4 : 0;
+    if (magic && region >= 3 && region <= 7) {
+      const code = `${(head[at + 0xe] >>> 4).toString(16)}${head[at + 0xd].toString(16).padStart(2, "0")}${head[at + 0xc].toString(16).padStart(2, "0")}`;
+      const regions = { 3: "SMS Japan", 4: "SMS Export", 5: "GG Japan", 6: "GG Export", 7: "GG International" };
+      const sizes = { 10: 0x2000, 11: 0x4000, 12: 0x8000, 13: 0xc000, 14: 0x10000, 15: 0x20000, 0: 0x40000, 1: 0x80000, 2: 0x100000 };
+      return { ...base, title: stem, platform: region >= 5 ? "gg" : "sms", order: "Banked ROM",
+        size: romSize, code, region: regions[region], checksum: head[at + 0xa] | (head[at + 0xb] << 8),
+        checksum_ok: smsChecksum(head, at, romSize, copier), declared: sizes[head[at + 0xf] & 0xf] || null };
+    }
+    const ext = (file.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase() || "";
+    if (!magic && (ext === "sms" || ext === "gg")) {
+      return { ...base, platform: ext, order: "Banked ROM", size: romSize, region: "unknown" };
+    }
+  }
   if (head.length >= 0x200 && crc16(head, 0, 0x15e) === dv.getUint16(0x15e, true)) {  // DS: the header's own checksum
     const ram = dv.getUint32(0x28, true), entry = dv.getUint32(0x24, true);
     if (ram >= 0x02000000 && ram < 0x02400000 && entry >= ram) return { ...base, platform: "nds", order: "ROM", code: ascii(12, 16), title: ascii(0, 12) || stem, entry };
@@ -316,6 +336,17 @@ function identifyHead(head, file) {
   return null;
 }
 
+function smsChecksum(head, at, size, copier) {
+  const byteAt = (n) => head[n + (copier ? 0x200 : 0)];
+  const declaredCodes = { 10: 0x2000, 11: 0x4000, 12: 0x8000, 13: 0xc000, 14: 0x10000,
+    15: 0x20000, 0: 0x40000, 1: 0x80000, 2: 0x100000 };
+  const end = Math.min(declaredCodes[byteAt(at + 0xf) & 0xf] || size, size);
+  if (end > head.length - (copier ? 0x200 : 0)) return null;
+  let sum = 0;
+  for (let i = 0; i < end; i++) if (i < at || i >= at + 0x10) sum = (sum + byteAt(i)) & 0xffff;
+  return sum === (byteAt(at + 0xa) | (byteAt(at + 0xb) << 8));
+}
+
 /* Files people try that decomp.wtf can't start from: say what they are and why, not just "no". */
 function notSupported(head, file) {
   const text = (a, b) => String.fromCharCode(...head.slice(a, b));
@@ -324,7 +355,7 @@ function notSupported(head, file) {
   if (text(0, 4) === "XEX2" || ext === "xex") return "That's an Xbox 360 program. Xbox 360 games aren't supported yet.";
   if (["nsp", "xci", "nso", "nro", "nca"].includes(ext) || text(0, 4) === "NSO0" || text(0, 4) === "PFS0") return "That's a Nintendo Switch file. Switch games aren't supported yet.";
   if (["sfc", "smc"].includes(ext)) return "That's a Super Nintendo ROM. SNES games were written in assembly, not compiled from C, so there's no C source to match.";
-  if (["nes", "md", "gen", "sms", "gg", "pce"].includes(ext)) return "Games for that console were written in assembly, not compiled from C, so there's no C source to match.";
+  if (["nes", "md", "gen", "pce"].includes(ext)) return "Games for that console were written in assembly, not compiled from C, so there's no C source to match.";
   if (ext === "cue") return "That's the .cue sheet: pick the .bin file next to it (the track with the game's data, usually Track 1).";
   if (["zip", "7z", "rar"].includes(ext)) return "That's an archive: unpack it first, then drop the game file inside.";
   if (ext === "apk") return "Android apps aren't supported yet.";
@@ -353,8 +384,11 @@ async function pickFile(file) {
     ? [["Game code", info.code || "—"], ["Region", info.region], ["Size", MB(info.size)], ["Format", info.order],
        ["Entry", hex8(info.entry)], ["Looks like", info.compiler === "IDO" ? "IDO" : "GCC (KMC)"]]
     : [["Platform", PLATFORM_NAME[p]], ["Format", info.order], ["Size", MB(info.size)],
+       info.region ? ["Region", info.region] : null,
        info.code ? ["Game ID", info.code] : ["Entry", info.entry != null ? hex8(info.entry) : "from the disc"],
-       ["Project", ["gc", "wii", "gcwii"].includes(p) ? "dtk-template" : p === "nds" ? "ds-decomp" : p === "gba" ? "luvdis" : ["gb", "gbc"].includes(p) ? "GBDK-2020" : "splat"]];
+       info.checksum != null ? ["Header checksum", `${info.checksum_ok == null ? "not checked" : info.checksum_ok ? "valid" : "mismatch"} (${hex8(info.checksum).slice(-4)})`] : null,
+       ["Project", ["gc", "wii", "gcwii"].includes(p) ? "dtk-template" : p === "nds" ? "ds-decomp" : p === "gba" ? "luvdis"
+         : ["gb", "gbc"].includes(p) ? "GBDK-2020" : ["sms", "gg"].includes(p) ? "GBDK-2020 / WLA-DX" : "splat"]].filter(Boolean);
   $("romFacts").innerHTML = facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("");
   const level = platformStatus(p);
   $("romStatus").hidden = !level;
@@ -377,6 +411,7 @@ function setupCompilers(info) {
   else if (p === "ps2") fillCompilers(select, "ee-gcc-2.96", "PS2");
   else if (p === "gba") fillCompilers(select, "agbcc", "GBA");
   else if (p === "gb" || p === "gbc") fillCompilers(select, "gbdk-2020", "Game Boy / Game Boy Color");
+  else if (p === "sms" || p === "gg") fillCompilers(select, "gbdk-2020", "Master System / Game Gear");
   else if (p === "playstation") {
     $("compilerRow").hidden = true; note.hidden = false;
     note.textContent = "The compiler is picked from the disc: PSY-Q-era GCC for PlayStation, EE-GCC for PlayStation 2. You can change it later.";
@@ -403,7 +438,7 @@ function updateAnalyse() {
 $("mwAccept").addEventListener("change", updateAnalyse);
 
 function fillCompilers(select, current, platform) {
-  const tcs = (S.st?.toolchains || []).filter((t) => t.kind === "compiler" && (!platform || !t.platform || t.platform === platform));
+  const tcs = (S.st?.toolchains || []).filter((t) => t.kind === "compiler" && (!platform || !t.platform || t.platform.includes(platform)));
   select.innerHTML = tcs.map((t) => {
     const note = !t.supported ? " (not available on this computer)" : t.installed ? "" : t.license === "proprietary" ? " (install in Compilers & tools)" : " (will be installed)";
     return `<option value="${esc(t.id)}" ${t.id === current ? "selected" : ""} ${t.supported ? "" : "disabled"}>${esc(t.name)} · ${esc(t.use)}${note}</option>`;
@@ -1086,7 +1121,7 @@ async function installToolchain(id, proprietary) {
 
 /* ------------------------------------------------------------------ public decomps */
 const PLAT_ORDER = ["gc", "wii", "ps", "ps2", "n64", "gba", "gb", "gbc", "nds", "switch", "win32", "xbox360", "3ds", "xbox", "psp"];
-const PLAT_SHORT = { gc: "GameCube", wii: "Wii", ps: "PS1", psx: "PS1", ps2: "PS2", n64: "N64", gba: "GBA", gb: "Game Boy", gbc: "Game Boy Color", nds: "DS", switch: "Switch", win32: "PC", xbox360: "Xbox 360", "3ds": "3DS", xbox: "Xbox", psp: "PSP" };
+const PLAT_SHORT = { gc: "GameCube", wii: "Wii", ps: "PS1", psx: "PS1", ps2: "PS2", n64: "N64", gba: "GBA", gb: "Game Boy", gbc: "Game Boy Color", sms: "Master System", gg: "Game Gear", nds: "DS", switch: "Switch", win32: "PC", xbox360: "Xbox 360", "3ds": "3DS", xbox: "Xbox", psp: "PSP" };
 const cat = { list: null, downloaded: null, plat: "", q: "", done: false };
 
 /* The list decomp.dev had, as this install downloaded it before the directory was retired (none on a new one). */

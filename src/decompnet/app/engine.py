@@ -18,6 +18,7 @@ import json
 import logging
 import re
 import secrets
+import shutil
 import struct
 import threading
 import time
@@ -36,7 +37,8 @@ DEFAULT_TOOLCHAIN = {"KMC": "gcc-2.7.2-kmc", "IDO": "ido-7.1", "PSYQ": "gcc-2.7.
 # of project as decomp.dev's, linked file by file as it's finished; N64: tested on real games, rebuilt byte for byte).
 # beta: works and is tested on homemade games, less so on real ones yet.
 PLATFORM_STATUS = {"gc": "recommended", "wii": "recommended", "n64": "recommended",
-                   "psx": "beta", "ps2": "beta", "gba": "beta", "gb": "beta", "gbc": "beta", "nds": "beta"}
+                   "psx": "beta", "ps2": "beta", "gba": "beta", "gb": "beta", "gbc": "beta", "nds": "beta",
+                   "sms": "beta", "gg": "beta"}
 COMPILERS = {
     "gcc-2.7.2-kmc": "many third-party N64 games",
     "ido-7.1": "most later first-party N64 games",
@@ -46,7 +48,7 @@ COMPILERS = {
     "gcc-2.8.1-psx": "later PlayStation games",
     "ee-gcc-2.96": "PlayStation 2 games (Sony's EE GCC)",
     "agbcc": "Game Boy Advance games (pret's agbcc, GCC 2.95)",
-    "gbdk-2020": "Game Boy and Game Boy Color games (SDCC)",
+    "gbdk-2020": "Game Boy, Game Boy Color, Master System and Game Gear games (SDCC)",
 }
 SHORT_NAMES = {"gcc-2.7.2-kmc": "KMC GCC 2.7.2", "ido-7.1": "IDO 7.1", "ido-5.3": "IDO 5.3",
                "gcc-2.5.7-psx": "GCC 2.5.7 (PS1)", "gcc-2.7.2-psx": "GCC 2.7.2 (PS1)",
@@ -72,13 +74,15 @@ TOOLS = {
     "mwcc": "CodeWarrior, the compilers of GameCube and Wii games (proprietary)",
     "mwccarm": "CodeWarrior for DS, the compilers of DS games (proprietary)",
     "dsd": "ds-decomp: analyses DS ROMs and rebuilds them",
+    "wla-dx": "WLA-DX assembler and linker for Master System / Game Gear assembly judging and exports",
 }
 # Functions this small are handed out in batches (claim_function count): agents match most on the first try.
 BATCH_INSNS = 48
 PLATFORM_COMPILERS = {"n64": ["gcc-2.7.2-kmc", "ido-7.1", "ido-5.3"],
                       "psx": ["gcc-2.5.7-psx", "gcc-2.7.2-psx", "gcc-2.8.1-psx"],
                       "ps2": ["ee-gcc-2.96"], "gba": ["agbcc"],
-                      "gb": ["gbdk-2020"], "gbc": ["gbdk-2020"]}
+                      "gb": ["gbdk-2020"], "gbc": ["gbdk-2020"],
+                      "sms": ["gbdk-2020"], "gg": ["gbdk-2020"]}
 _AUTO_TOKEN = re.compile(r"\b(?:func|D|B|jtbl|RO|STR|FLT|DBL)_[0-9A-F]{8}\b")
 _ADDRESS = re.compile(r"^(?:0x)?([0-9A-Fa-f]{8})$")
 
@@ -318,6 +322,8 @@ class RomNetwork(Network):
         platform = self.cfg(proj).get("platform")
         if platform in ("gb", "gbc"):
             return FunctionObj(fn["name"], "sm83", False, fn["target"], [])
+        if platform in ("sms", "gg"):
+            return FunctionObj(fn["name"], "z80", False, fn["target"], [])
         if platform == "gba":
             return FunctionObj(fn["name"], "thumb", False, fn["target"], [])
         return match.canonical_target(self._rom_target(fn), self.symbols(proj["id"]))
@@ -326,7 +332,7 @@ class RomNetwork(Network):
         if not self.is_rom(proj):
             return super()._evaluate(fn, proj, obj)
         platform = self.cfg(proj).get("platform")
-        if platform in ("gb", "gbc"):
+        if platform in ("gb", "gbc", "sms", "gg"):
             from ..elfobj import function_from_payload
 
             cand = function_from_payload(obj, fn["name"])
@@ -370,7 +376,7 @@ class RomNetwork(Network):
 
     def _compile(self, proj, header: str, source: str):
         """Compile banked Game Boy candidates through SDCC's listing-based lane (no ELF object is produced)."""
-        if self.is_rom(proj) and self.cfg(proj).get("platform") in ("gb", "gbc"):
+        if self.is_rom(proj) and self.cfg(proj).get("platform") in ("gb", "gbc", "sms", "gg"):
             from ..compiler import CompileResult
             from ..rom import gb_build
 
@@ -380,8 +386,9 @@ class RomNetwork(Network):
                                  for p in (cfg.get("compiler") or {}).get("include_dirs", []))
             flags = (cfg.get("compiler") or {}).get("flags")
             try:
+                arch = "z80" if cfg.get("platform") in ("sms", "gg") else "sm83"
                 payload = gb_build.build_payload(source, name=None, context_header=header, symbols=symbols,
-                                                 include_dirs=include_dirs, arch="sm83",
+                                                 include_dirs=include_dirs, arch=arch,
                                                  **({} if flags is None else {"opt": list(flags)}))
             except Exception as e:
                 return CompileResult(False, None, f"{type(e).__name__}: {e}")
@@ -420,6 +427,12 @@ class RomNetwork(Network):
             return self._import_gba(picked, slug, workdir, toolchain, flags, log)
         if picked.platform in ("gb", "gbc"):
             return self._import_gb(picked, slug, workdir, log)
+        if picked.platform in ("sms", "gg"):
+            if isinstance(data, (str, Path)):
+                sidecar = Path(data).with_suffix(".sym")
+                if sidecar.is_file():
+                    shutil.copyfile(sidecar, (workdir / picked.filename).with_suffix(".sym"))
+            return self._import_sms(picked, slug, workdir, log)
         if picked.overlays:
             log(f"{len(picked.overlays)} overlay{'s' if len(picked.overlays) != 1 else ''} on the disc: "
                 + ", ".join(f"{o[0]} at 0x{o[2]:08X}" for o in picked.overlays[:6]) + (", ..." if len(picked.overlays) > 6 else ""))
@@ -541,6 +554,77 @@ class RomNetwork(Network):
                 toolchains.install(tid, log=lambda line: log(f"  {line}"))
             except Exception as e:
                 log(f"couldn't install {tc.name}: {e}")
+
+    def _ensure_sms_tools(self, log) -> None:
+        if not self.auto_install_gb_tools:
+            return
+        try:
+            tc = toolchains.get("gbdk-2020")
+            if tc.supported and toolchains.installed(tc.id) is None:
+                log(f"installing {tc.name} (needed to match this game)")
+                toolchains.install(tc.id, log=lambda line: log(f"  {line}"))
+        except Exception as e:
+            log(f"couldn't install GBDK-2020: {e}")
+
+    def _import_sms(self, picked, slug: str, workdir: Path, log) -> str:
+        """Import Master System / Game Gear ROMs with bank-aware Z80 disassembly and SDCC matching."""
+        from ..rom import gb_build, sms
+
+        self._ensure_sms_tools(log)
+        info = picked.info
+        report: dict = {}
+        functions = sms.split(workdir / picked.filename, workdir, log=log, report=report)
+        matchable = gb_build.available("z80")
+        banks = info["rom_banks"]
+        bases = report.get("bank_base", {})
+        segments = []
+        for bank in range(banks):
+            base = 0 if bank == 0 else bases.get(bank, sms.slot_base(bank, info["size"]))
+            segments.append({"name": f"bank{bank:03d}", "rom_start": bank * sms.BANK_SIZE,
+                             "rom_end": min((bank + 1) * sms.BANK_SIZE, info["size"]), "vram": base})
+        tc = toolchains.get("gbdk-2020")
+        compiler_flags = list(tc.flags)
+        cfg = {
+            "kind": "rom", "platform": info["platform"], "big_endian": False, "gp": 0, "arch": "z80",
+            "splitter": report.get("splitter", "built-in"),
+            "rom": {**info, "file": picked.filename, "program": picked.filename},
+            "segments": segments,
+            "compiler": {"toolchain": "gbdk-2020", "flags": compiler_flags, "timeout": 120,
+                         "provenance": "explicit" if matchable else "unavailable"},
+            "legal": {"basis": "personal-copy", "license": "personal use only",
+                      "statement": "imported by the owner of this copy of the game, who confirmed it was legally obtained",
+                      "confirmed_at": time.time()},
+            "context": {"file": None},
+        }
+        with self.store.tx() as db:
+            pid = db.execute("INSERT INTO projects(slug,name,description,arch,big_endian,root,config) "
+                             "VALUES(?,?,?,?,?,?,?)",
+                             (slug, info["title"], f"{info['cartridge']} · {info['region']} · {len(functions)} functions",
+                              "z80", 0, str(workdir), json.dumps(cfg))).lastrowid
+            names: set[str] = set()
+            for fn in functions:
+                name = fn.name
+                if name in names:
+                    name = f"{name}_{fn.rom:06x}"
+                names.add(name)
+                db.execute(
+                    "INSERT INTO functions(project_id,name,size,n_insns,target,relocs,asm,seed,unit,vram,rom_offset,status) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (pid, name, fn.size, fn.n_insns, fn.code, json.dumps([list(r) for r in fn.refs]),
+                     fn.asm, None, f"bank{fn.bank:03d}", fn.vram, fn.rom, "open" if matchable else "asm"))
+                db.execute("INSERT INTO symbols(project_id,name,address,size,kind,preview) VALUES(?,?,?,?,?,?)",
+                           (pid, name, fn.vram, fn.size, "func", None))
+            db.execute("INSERT INTO context_versions(project_id,version,header,agent_id,message,created_at,unit) "
+                       "VALUES(?,?,?,?,?,?,?)",
+                       (pid, 1, BASE_HEADER.format(title=info["title"]), None, "basic types", time.time(), ""))
+            regions = report.get("regions") or []
+            for region in regions:
+                db.execute("INSERT OR REPLACE INTO data_regions(project_id,rom_offset,size,kind,why) VALUES(?,?,?,?,?)",
+                           (pid, int(region[0]), int(region[1]), str(region[2]), str(region[3])))
+            self._event(db, pid, None, "import", f"{len(functions)} functions from {info['title']}")
+        log(f"ready: {len(functions)} functions to decompile" if matchable else
+            f"ready: {len(functions)} functions disassembled; GBDK-2020 is unavailable, so matching is read-only")
+        return slug
 
     def _import_gb(self, picked, slug: str, workdir: Path, log) -> str:
         """Import GB/GBC cartridges with one CPU-address segment per ROM bank."""
@@ -1386,10 +1470,12 @@ class RomNetwork(Network):
         from ..rom.export import export_rom
         from ..rom.export_gba import export_gba
         from ..rom.export_gb import export_gb
+        from ..rom.export_sms import export_sms
 
         proj = self._project(slug)
         platform = self.cfg(proj).get("platform")
-        export = export_gb if platform in ("gb", "gbc") else export_gba if platform == "gba" else export_rom
+        export = (export_gb if platform in ("gb", "gbc") else export_sms if platform in ("sms", "gg")
+                  else export_gba if platform == "gba" else export_rom)
         res = export(self, slug, Path(proj["root"]) / "source", log=log)
         with self.store.tx() as db:  # shown on the project page: what's in the tree and whether it rebuilds
             cfg = json.loads(db.execute("SELECT config FROM projects WHERE id=?", (proj["id"],)).fetchone()["config"])
@@ -1442,7 +1528,7 @@ class RomNetwork(Network):
             "context_version": self._context(proj["id"])["version"],
             "folder": proj["root"],
             "export": cfg.get("export"),
-            "exportable": cfg.get("platform", "n64") in ("n64", "psx", "ps2", "gba", "gb", "gbc"),
+            "exportable": cfg.get("platform", "n64") in ("n64", "psx", "ps2", "gba", "gb", "gbc", "sms", "gg"),
             "room": self._room_info(proj["slug"]),
         }
 
@@ -1840,10 +1926,11 @@ class RomNetwork(Network):
         with self.store.tx() as db:
             db.execute("UPDATE projects SET config=? WHERE id=?", (json.dumps(cfg), proj["id"]))
             db.execute("UPDATE functions SET seed=NULL WHERE project_id=? AND status='open'", (proj["id"],))
-            if cfg.get("platform") in ("gb", "gbc") and tc.id == "gbdk-2020":
+            if cfg.get("platform") in ("gb", "gbc", "sms", "gg") and tc.id == "gbdk-2020":
                 from ..rom import gb_build
 
-                if gb_build.available("sm83"):
+                arch = "z80" if cfg.get("platform") in ("sms", "gg") else "sm83"
+                if gb_build.available(arch):
                     db.execute("UPDATE functions SET status='open' WHERE project_id=? AND status='asm'", (proj["id"],))
             self._event(db, proj["id"], None, "compiler", f"{tc.name} {' '.join(cfg['compiler']['flags'])}")
 
