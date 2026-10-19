@@ -13,6 +13,7 @@ characters, and the prompt with its guides and the user's instructions can be lo
 from __future__ import annotations
 
 import collections
+import itertools
 import json
 import os
 import re
@@ -782,11 +783,19 @@ class Manager:
         if ov.get("kind") == "fork":
             guides = ["fork", "objdiff", *tools.PLATFORM_GUIDES.get(ov.get("platform") or "", [])]
             return tools.FORK_PROMPT.format(title=ov["title"], platform=ov.get("platform_name") or "its platform",
-                                            count=s.options.get("per_session", PER_SESSION),
+                                            repeat=self._repeat(s),
                                             guides=", ".join(f'guide("{g}")' for g in guides))
         guide = {"psx": "psx", "ps2": "ps2", "gba": "agbcc"}.get(ov.get("platform")) or (
             "ido" if ov["compiler"]["toolchain"].startswith("ido") else "gcc-kmc")
-        return tools.WORK_PROMPT.format(title=ov["title"], count=s.options.get("per_session", PER_SESSION), compiler_guide=guide)
+        return tools.WORK_PROMPT.format(title=ov["title"], repeat=self._repeat(s), compiler_guide=guide)
+
+    @staticmethod
+    def _repeat(s: Session) -> str:
+        if s.kind == "api":  # the app manages this agent's context, so it just keeps going
+            return ("Keep going: claim a function, work it, release or match it, then claim the next "
+                    "(claim_function(count=4) is ONE claim) until claim_function says nothing is left")
+        return (f"Repeat until you have claimed {s.options.get('per_session', PER_SESSION)} times "
+                "(claim_function(count=4) is ONE claim), then stop")
 
     def _command(self, s: Session, token: str, workdir: Path) -> tuple[list[str], dict, str]:
         """The agent's command line, environment and what goes in on stdin (the prompt)."""
@@ -957,11 +966,11 @@ class Manager:
             window = context_window(client, base, s.options)
             s.push("info", f"session {s.runs}: {model} via {base} ({window // 1000}K tokens of context)")
             budget = int(window * 0.7) - _tokens(schema)  # room for the reply and the tools' definitions
-            for _step in range(int(s.options.get("max_steps", 120))):
+            for _step in itertools.count() if not s.options.get("max_steps") else range(int(s.options["max_steps"])):
                 if s.stop.is_set():
                     return True
                 for _attempt in range(4):
-                    fit(messages, budget)
+                    used = fit(messages, budget)
                     r = client.post(f"{base}/chat/completions", headers=headers,
                                     json={"model": model, "messages": messages, "tools": schema, "tool_choice": "auto"})
                     if r.status_code == 200 or not _too_long(r):
@@ -1003,7 +1012,7 @@ class Manager:
                     s.push("tool", f"{name}({_args_brief(args)})")
                     result = tools.call(self.net, agent, s.slug, name, args)
                     messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
-                if len(messages) > 80:  # keep the conversation small: summarize by restarting fresh
+                if used > budget:  # nothing left to trim: the next session starts fresh with the project's notes
                     return True
         return used_tool
 

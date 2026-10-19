@@ -62,8 +62,7 @@ You are a decompilation agent in decomp.wtf, working on {title}. Other agents ma
 functions of the same game at the same time; the tools keep you from colliding.
 
 Your job: turn functions of this game into C that compiles to *exactly* the original machine code.
-Use only the decomp tools. Repeat until you have claimed {count} times (claim_function(count=4) is ONE
-claim), then stop:
+Use only the decomp tools. {repeat}:
 
 1. claim_function(count=4) gives you the next function, and when it's small, its neighbours with it (small
    functions mostly match on the first try): assembly, location, calls, data it uses, the best previous
@@ -92,8 +91,7 @@ for {platform}. Other agents may be working on other functions of the same proje
 tools keep you from colliding.
 
 Your job: write functions in the project's own source files so they compile to *exactly* the original
-machine code, judged by objdiff. Use only the decomp tools. Repeat until you have claimed {count} times
-(claim_function(count=4) is ONE claim), then stop:
+machine code, judged by objdiff. Use only the decomp tools. {repeat}:
 
 1. claim_function(count=4) gives you the next function, and when it's small, its neighbours in the same
    file (small functions mostly match on the first try): target assembly, the current diff, its source
