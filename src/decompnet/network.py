@@ -27,7 +27,7 @@ CLAIM_TTL = 30 * 60
 # starts on something fresh instead of passing the same function back and forth. Asked for by name, it comes at once.
 RELEASE_COOLDOWN = 15 * 60
 MACHINE_AGENTS = ("autopilot", "permuter")  # decomp.wtf's own workers: their claims never mean "given up on"
-STALL_LIMIT = 5  # agent attempts on one function without a better score, then it's ignored until unlocked
+STALL_LIMIT = 10  # agent attempts on one function without a better score, then it's ignored until unlocked
 
 
 def is_ai_agent(agent) -> bool:
@@ -456,12 +456,13 @@ class Network:
         """The agent's warning before the stall rule bites, and the notice once it has."""
         row = self.store.one("SELECT stalls, ignored FROM functions WHERE id=?", function_id)
         if row and row["ignored"]:
-            return ("\n\n🚫 This function is now IGNORED: it took 5 attempts in a row without a better score, so it's "
-                    "closed to agents (your claim is gone) until the user unlocks it. Call claim_function for the next one.")
+            return (f"\n\n🚫 This function is now IGNORED: it took {STALL_LIMIT} attempts in a row without a better "
+                    "score, so it's closed to agents (your claim is gone) until the user unlocks it. "
+                    "Call claim_function for the next one.")
         if row and row["stalls"] == STALL_LIMIT - 1:
             return (f"\n\n⚠️ {row['stalls']} attempts in a row without a better score. One more and this function is "
-                    "ignored (closed to agents until the user unlocks it). Make the next try count, or release_function "
-                    "now with notes.")
+                    "ignored (closed to agents until the user unlocks it). Make the next try count, or "
+                    "release_function now with notes.")
         return self._stall_nudge(function_id, agent_id, after)
 
     @staticmethod
@@ -474,6 +475,13 @@ class Network:
         fn = self._function(function, project)
         with self.store.tx() as db:
             db.execute("UPDATE functions SET ignored=0, stalls=0 WHERE id=?", (fn["id"],))
+
+    def unlock_all_functions(self, project: str) -> int:
+        """Reopen every ignored function in one project without clearing its attempts or best score."""
+        proj = self._project(project)
+        with self.store.tx() as db:
+            return db.execute("UPDATE functions SET ignored=0, stalls=0 WHERE project_id=? AND ignored=1",
+                              (proj["id"],)).rowcount
 
     def _stall_nudge(self, function_id: int, agent_id: int, after: int | None = None) -> str:
         """A nudge once an agent's last `after` compiles of a function didn't beat its best: functions that match
@@ -767,6 +775,27 @@ class Network:
             db.execute("UPDATE functions SET status='open', best_score=NULL, best_source=NULL, best_agent_id=NULL, "
                        "matched_source=NULL, matched_agent_id=NULL, matched_at=NULL, attempts=0, abandons=0, stalls=0, ignored=0 "
                        "WHERE id=?", (fn["id"],))
+
+    def reset_project_progress(self, slug: str) -> dict[str, int]:
+        """Clear project attempts and agent progress while preserving its imported layout and settings."""
+        proj = self._project(slug)
+        with self.store.tx() as db:
+            functions = db.execute("SELECT COUNT(*) FROM functions WHERE project_id=?", (proj["id"],)).fetchone()[0]
+            claims = db.execute("DELETE FROM claims WHERE function_id IN "
+                                "(SELECT id FROM functions WHERE project_id=?)", (proj["id"],)).rowcount
+            attempts = db.execute("DELETE FROM attempts WHERE function_id IN "
+                                  "(SELECT id FROM functions WHERE project_id=?)", (proj["id"],)).rowcount
+            notes = db.execute("DELETE FROM notes WHERE project_id=?", (proj["id"],)).rowcount
+            events = db.execute("DELETE FROM events WHERE project_id=? AND COALESCE(kind,'')!='import'",
+                                (proj["id"],)).rowcount
+            twin_misses = db.execute("DELETE FROM twin_misses WHERE project_id=?", (proj["id"],)).rowcount
+            db.execute(
+                "UPDATE functions SET status=CASE WHEN status='matched' THEN 'open' ELSE status END, "
+                "best_score=NULL, best_source=NULL, best_agent_id=NULL, matched_source=NULL, matched_agent_id=NULL, "
+                "matched_at=NULL, attempts=0, abandons=0, stalls=0, ignored=0 WHERE project_id=?",
+                (proj["id"],))
+        return {"functions": functions, "claims": claims, "attempts": attempts, "notes": notes,
+                "events": events, "twin_misses": twin_misses}
 
     def revoke_agent(self, name: str, erase: bool = False) -> None:
         """Disable an agent's token. With erase=True also strip its identity (GDPR erasure):

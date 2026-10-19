@@ -80,6 +80,7 @@ const S = {
   scores: new Map(), claims: [], flash: new Map(), timer: null, statsTimer: null, lastMapFetch: 0, fn: null, stats: null,
   projects: [],
 };
+let projectGeneration = 0;
 const VIEWS = ["home", "catalog", "project", "agentsPage", "toolsPage", "settingsPage"];
 const TABS = ["overview", "functions", "agents", "activity", "team", "source", "settings"];
 
@@ -535,14 +536,18 @@ $("demoBtn").onclick = () => runImport("demo=1", undefined, "Opening Demo Quest 
 
 /* ------------------------------------------------------------------ project */
 async function openProject(slug, tab = "overview") {
+  const generation = ++projectGeneration;
   show("project");
   S.slug = slug; S.e = 0; S.a = 0; S.seq = {}; S.scores = new Map(); S.flash = new Map(); S.sessions = []; S.claims = [];
   S.apFeed = null; S.stats = null; S.map = []; S.mapSig = null; geo = null;
   $("activity").innerHTML = ""; $("thoughts").innerHTML = ""; $("now").innerHTML = ""; $("expLog").hidden = true; $("expResult").innerHTML = ""; $("teamBox").innerHTML = "";
   try {
     if (!S.st) await loadState();
-    S.ov = await api(`/api/project?slug=${slug}`);
+    const overview = await api(`/api/project?slug=${slug}`);
+    if (generation !== projectGeneration) return;
+    S.ov = overview;
   } catch (e) {
+    if (generation !== projectGeneration) return;
     toast(esc(e.message), "err");
     location.hash = "#/";
     return;
@@ -602,8 +607,9 @@ document.querySelectorAll("[data-goto]").forEach((a) => {
 /* The whole map only when something changed (`force`: a rename or a split, which the signature can't see). */
 async function refreshMap(force = true) {
   const slug = S.slug;
+  const generation = projectGeneration;
   const data = await api(`/api/map?slug=${slug}${!force && S.mapSig ? `&since=${encodeURIComponent(S.mapSig)}` : ""}`);
-  if (slug !== S.slug) return;
+  if (slug !== S.slug || generation !== projectGeneration) return;
   S.lastMapFetch = Date.now();
   if (data.same) return;
   S.mapSig = data.sig;
@@ -639,9 +645,10 @@ async function poll(first) {
   if (polling || !S.slug) return;
   polling = true;
   const slug = S.slug;
+  const generation = projectGeneration;
   try {
     const live = await api(`/api/live?slug=${slug}&e=${S.e}&a=${S.a}&s=${encodeURIComponent(JSON.stringify(S.seq))}`);
-    if (slug !== S.slug) return;
+    if (slug !== S.slug || generation !== projectGeneration) return;
     S.ov = live.overview;
     let mapDirty = false;
     for (const ev of live.events) {
@@ -2152,7 +2159,7 @@ function renderList() {
     const best = st === "matched" ? `<span class="ok">100%</span>` : p == null ? `<span class="dim">–</span>` : pctText(p);
     const status = st === "matched" ? `<span class="st matched" title="${esc(f.matched_by ? "by " + f.matched_by : "")}">matched</span>` : st === "asm" ? `<span class="st" title="hand-written assembly: no C compiles to it">assembly</span>` : st === "working" ? `<span class="st working">${esc(f.agent || "working")}</span>`
       : st === "tried" ? `<span class="st tried">tried</span>` : `<span class="st">to do</span>`;
-    const flag = f.ignored && st !== "matched" ? ` <span class="st" title="agents gave up on it (5 attempts without improvement): open it to unlock">🚫 ignored</span>` : "";
+    const flag = f.ignored && st !== "matched" ? ` <span class="st" title="agents gave up on it (10 attempts without improvement): open it to unlock">🚫 ignored</span>` : "";
     return `<tr data-fn="${esc(f.name)}" class="${S.fn === f.name ? "sel" : ""}" tabindex="0"><td class="mono dim">${fork ? esc(f.unit || "") : hex8(f.vram)}</td>
       <td class="mono name">${(S.ov && (S.ov.priority || []).includes(f.name)) ? `<span class="star" title="agents take it next">★</span>` : ""}${esc(f.name)}</td><td class="r mono">${f.insns.toLocaleString()}</td><td class="r mono">${best}</td>
       <td class="r mono">${f.attempts || `<span class="dim">0</span>`}</td><td>${status}${flag}</td></tr>`;
@@ -2471,6 +2478,30 @@ $("setTcSave").onclick = async () => {
   } catch (e) { toast(esc(e.message), "err"); }
 };
 $("folderBtn").onclick = () => openFolder();
+$("unlockAllBtn").onclick = async () => {
+  try {
+    const { unlocked } = await api("/api/unlock-all", { method: "POST", body: { slug: S.slug } });
+    await refreshMap(true);
+    toast(unlocked ? `Unlocked ${plural(unlocked, "stuck function")}.` : "No stuck functions to unlock.");
+  } catch (e) { toast(esc(e.message), "err"); }
+};
+$("resetProgressBtn").onclick = () => {
+  dialog("Start from scratch?", `<p>This clears all matches, compile attempts and best submissions, notes, stuck markers, and saved agent sessions for <b>${esc(S.ov.title)}</b>.</p>
+    <p>The imported function layout, symbols, headers, compiler, and project settings stay as they are. This can't be undone.</p>
+    <div class="row"><button class="primary danger" id="resetProgressGo" type="button">Clear project progress</button><button class="ghost" data-close type="button">Cancel</button></div>`);
+  $("resetProgressGo").onclick = async () => {
+    const slug = S.slug, tab = S.tab;
+    $("resetProgressGo").disabled = true;
+    try {
+      const result = await api("/api/reset-progress", { method: "POST", body: { slug } });
+      $("dialog").hidden = true;
+      document.body.classList.remove("locked");
+      leaveProject();
+      await openProject(slug, tab);
+      toast(`Reset complete: cleared ${plural(result.attempts, "compile")}, ${plural(result.notes, "note")}, and ${plural(result.sessions, "agent session")}.`);
+    } catch (e) { toast(esc(e.message), "err"); $("resetProgressGo").disabled = false; }
+  };
+};
 $("deleteBtn").onclick = () => {
   dialog("Remove project", `<p>Remove <b>${esc(S.ov.title)}</b> from decomp.wtf? Matched functions and notes are deleted.</p>
     <label class="check"><input type="checkbox" id="delFiles"><span>Also delete the project folder (your ROM copy and exported sources in it)</span></label>

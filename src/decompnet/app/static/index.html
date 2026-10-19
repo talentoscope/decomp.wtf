@@ -366,6 +366,17 @@
         </div>
       </section>
     </div>
+    <section class="panel">
+      <header class="panel-head"><h2>Project progress</h2></header>
+      <div class="pad">
+        <p class="muted small">Unlock every stuck function without erasing its attempts, score, or notes.</p>
+        <button class="ghost small-btn" id="unlockAllBtn" type="button">Unlock all stuck functions</button>
+      </div>
+    </section>
+    <section class="panel danger-zone">
+      <header class="panel-head"><h2>Start from scratch</h2></header>
+      <div class="pad row"><p class="muted small grow">Clear matches, compile history, notes, and saved agent sessions. Imported layout, symbols, headers, and project settings are kept.</p><button class="ghost danger" id="resetProgressBtn" type="button">Start from scratch…</button></div>
+    </section>
     <section class="panel danger-zone">
       <header class="panel-head"><h2>Remove project</h2></header>
       <div class="pad row"><p class="muted small grow">Matched functions and notes are deleted from decomp.wtf. You can keep or delete the project folder.</p><button class="ghost danger" id="deleteBtn" type="button">Remove project…</button></div>
@@ -419,7 +430,7 @@
       <div class="row">
         <span class="badge" id="fnStatus"></span>
         <button class="ghost small-btn pin" id="fnPin" type="button" title="Agents take this function next">★ Next</button>
-        <button class="ghost small-btn" id="fnUnlock" type="button" hidden title="Agents gave up on this function after 5 attempts without improvement. Let them claim it again.">🔓 Unlock</button>
+        <button class="ghost small-btn" id="fnUnlock" type="button" hidden title="Agents gave up on this function after 10 attempts without improvement. Let them claim it again.">🔓 Unlock</button>
         <button class="ghost icon" id="fnPrev" type="button" aria-label="Previous function" title="Previous function (K)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.3 2.7 11.4 3.8 7.2 8l4.2 4.2-1.1 1.1L5 8z"/></svg></button>
         <button class="ghost icon" id="fnNext" type="button" aria-label="Next function" title="Next function (J)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.7 2.7 4.6 3.8 8.8 8l-4.2 4.2 1.1 1.1L11 8z"/></svg></button>
         <button class="ghost icon" data-close type="button" aria-label="Close" title="Close (Esc)">✕</button>

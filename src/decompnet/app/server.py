@@ -628,6 +628,21 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         net.unlock_function(slug, str(data.get("name", "")))
         return {"ok": True}
 
+    def p_unlock_all(slug, request, data):
+        return {"unlocked": net.unlock_all_functions(slug)}
+
+    def p_reset_progress(slug, request, data):
+        net.project_row(slug)
+        net.stop_autopilot(slug)
+        net.permuter.stop(slug)
+        if job := net.twins.jobs.get(slug):
+            job.stop.set()
+            job.ordered.set()
+        sessions = [s for s in list(manager.sessions.values()) if s.slug == slug]
+        for session in sessions:
+            manager.remove(session.id)
+        return net.reset_project_progress(slug) | {"sessions": len(sessions)}
+
     def p_priority(slug, request, data):
         return {"priority": net.set_priority(slug, str(data.get("name", "")), bool(data.get("on", True)))}
 
@@ -657,6 +672,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         "/api/try": (p_try, ["POST"]), "/api/release": (p_release, ["POST"]),
         "/api/autopilot": (p_autopilot, ["POST"]), "/api/instructions": (p_instructions, ["POST"]),
         "/api/priority": (p_priority, ["POST"]), "/api/unlock": (p_unlock, ["POST"]), "/api/note": (p_note, ["POST"]),
+        "/api/unlock-all": (p_unlock_all, ["POST"]), "/api/reset-progress": (p_reset_progress, ["POST"]),
         "/api/stats": (lambda s, r, d: net.stats(s), ["GET"]),
     }
     for path, (fn, methods) in routes.items():

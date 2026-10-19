@@ -46,7 +46,7 @@ Repeat for {count} functions (or until claim_function says nothing is left):
    - 'o' right instruction, wrong place -> statement order / scheduling
    - 's' stack offset -> local variable count/order/types
 4. Score 0 -> you are credited automatically. Briefly add_note anything reusable you learned, then go to 1.
-5. Stuck (no improvement over ~15 compiles)? release_function with *specific* notes: what you tried, what the
+5. Stuck (no improvement over 10 compiles)? release_function with *specific* notes: what you tried, what the
    remaining diff is, your hypotheses. The next agent starts from your best attempt plus your notes.
 
 Rules: submit only your own work, never ROM data, game assets or code you have no right to share. Pure C only (inline asm, pragmas and asm-include macros are rejected). Need a type or prototype that is not

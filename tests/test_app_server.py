@@ -82,6 +82,46 @@ def test_settings_never_echo_the_api_key(app):
     assert "sk-abcdef" not in json.dumps(client.get("/api/state").json())
 
 
+def test_project_can_unlock_all_stuck_functions_or_reset_progress(app):
+    client, net, _ = app
+    with net.store.tx() as db:
+        project_id = db.execute("INSERT INTO projects(slug,name,root,config) VALUES(?,?,?,?)",
+                                ("progress-reset-test", "Progress reset test", ".", '{"instructions":"keep"}')).lastrowid
+        matched = db.execute("INSERT INTO functions(project_id,name,status,best_score,best_source,matched_source,attempts,"
+                             "ignored,stalls) VALUES(?,?,'matched',0,'source','source',1,1,10)",
+                             (project_id, "matched_fn")).lastrowid
+        assembly = db.execute("INSERT INTO functions(project_id,name,status) VALUES(?,?,'asm')",
+                              (project_id, "assembly_fn")).lastrowid
+        db.execute("INSERT INTO attempts(function_id,score,compiled,source) VALUES(?,40,1,'source')", (matched,))
+        db.execute("INSERT INTO notes(project_id,function_id,text) VALUES(?,?,?)", (project_id, matched, "agent note"))
+        db.execute("INSERT INTO claims(function_id,agent_id,claimed_at,expires_at) VALUES(?,1,0,10)", (matched,))
+        db.execute("INSERT INTO context_versions(project_id,version,header,message) VALUES(?,1,'kept','initial')",
+                   (project_id,))
+        db.execute("INSERT INTO events(project_id,kind,detail) VALUES(?,'import','original')", (project_id,))
+        db.execute("INSERT INTO events(project_id,kind,detail) VALUES(?,'match','matched_fn')", (project_id,))
+
+    headers = {"X-Decomp": "1"}
+    slug = "progress-reset-test"
+    unlocked = client.post("/api/unlock-all", json={"slug": slug}, headers=headers)
+    assert unlocked.status_code == 200 and unlocked.json() == {"unlocked": 1}
+    assert net.store.one("SELECT COUNT(*) AS n FROM attempts WHERE function_id=?", matched)["n"] == 1
+
+    with net.store.tx() as db:
+        db.execute("UPDATE functions SET ignored=1, stalls=10 WHERE id=?", (matched,))
+    reset = client.post("/api/reset-progress", json={"slug": slug}, headers=headers)
+    assert reset.status_code == 200
+    assert reset.json()["attempts"] == 1 and reset.json()["notes"] == 1 and reset.json()["claims"] == 1
+    assert tuple(net.store.one("SELECT status,best_score,best_source,matched_source,attempts,ignored,stalls "
+                               "FROM functions WHERE id=?", matched)) == ("open", None, None, None, 0, 0, 0)
+    assert net.store.one("SELECT status FROM functions WHERE id=?", assembly)["status"] == "asm"
+    assert net.store.one("SELECT config FROM projects WHERE id=?", project_id)["config"] == '{"instructions":"keep"}'
+    assert net.store.one("SELECT header FROM context_versions WHERE project_id=?", project_id)["header"] == "kept"
+    assert net.store.one("SELECT COUNT(*) AS n FROM events WHERE project_id=? AND kind='import'",
+                         project_id)["n"] == 1
+    assert net.store.one("SELECT COUNT(*) AS n FROM events WHERE project_id=? AND kind='match'",
+                         project_id)["n"] == 0
+
+
 def test_parse_agent_output():
     claude = json.dumps({"type": "assistant", "message": {"content": [
         {"type": "text", "text": "Matched it."},

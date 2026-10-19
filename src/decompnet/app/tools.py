@@ -79,8 +79,8 @@ claim), then stop:
    function) for a compiler quirk or convention every agent here should know: the next sessions start with it.
 5. compile_and_diff says when to move on (no better after 4 compiles in a row; up to 10 for big functions):
    then release_function with precise notes (what you tried, what is left) and claim the next one.
-   Hard limit: 5 compiles in a row on one function without a better score and it is IGNORED: closed to
-   agents (your claim is dropped) until the user unlocks it. You get a warning at 4. Release with notes
+   Hard limit: 10 compiles in a row on one function without a better score and it is IGNORED: closed to
+   agents (your claim is dropped) until the user unlocks it. You get a warning at 9. Release with notes
    before that; compile errors count too, so don't burn tries on guesses.
 
 Write plausible original code, pure C (no inline asm). Be brief in your messages: work, don't narrate.
@@ -116,8 +116,8 @@ machine code, judged by objdiff. Use only the decomp tools. Repeat until you hav
 6. compile_and_diff says when to move on (no better after 4 compiles in a row; up to 10 for big functions):
    then release_function with precise notes (what you tried, what is left) and claim the next. Very large
    functions: get the structure right first; a near miss is worth the extra compiles.
-   Hard limit: 5 compiles in a row on one function without a better score and it is IGNORED: closed to
-   agents (your claim is dropped) until the user unlocks it. You get a warning at 4. Release with notes
+   Hard limit: 10 compiles in a row on one function without a better score and it is IGNORED: closed to
+   agents (your claim is dropped) until the user unlocks it. You get a warning at 9. Release with notes
    (add_note) before that; compile errors count too, so don't burn tries on guesses.
 
 Rules: C/C++ only (no inline asm, asm functions or asm includes); don't touch targets, configs or build

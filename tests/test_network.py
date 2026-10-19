@@ -255,22 +255,79 @@ def test_big_functions_get_more_compiles_before_the_nudge_to_move_on(net, agents
     assert net.stall_note(fn["id"], alice.id) == ""  # a big one: not before 10
 
 
-def test_agent_stalled_five_times_ignores_the_function_until_unlocked(net, agents):
+def test_agent_stalled_ten_times_ignores_the_function_until_unlocked(net, agents):
     alice, bob = agents
     fn = net.store.one("SELECT * FROM functions WHERE name='clamp_s32'")
     net.claim(alice, "demo", "clamp_s32")
-    for score in (50, 40, 40, 45, 41, 40):  # 40 is a repeat: 4 non-improving tries after the last improvement
+    for score in (50, 40, 40, 45, 41, 40, 42, 43, 44, 45, 46):
         net._record(fn, alice, score, "x", 1)
     assert not net.store.one("SELECT ignored FROM functions WHERE id=?", fn["id"])["ignored"]
-    net._record(fn, alice, 42, "x", 1)  # the 5th in a row
+    assert "9 attempts in a row" in net.stall_note(fn["id"], alice.id)
+    net._record(fn, alice, 47, "x", 1)  # the 10th in a row
     row = net.store.one("SELECT ignored, stalls FROM functions WHERE id=?", fn["id"])
-    assert row["ignored"] and row["stalls"] == 5
+    assert row["ignored"] and row["stalls"] == 10
+    assert "10 attempts in a row" in net.stall_note(fn["id"], alice.id)
     assert net.store.one("SELECT 1 FROM claims WHERE function_id=?", fn["id"]) is None
     with pytest.raises(NetworkError, match="ignored"):
         net.claim(bob, "demo", "clamp_s32")
     assert "clamp_s32" not in net.claim(bob, "demo")  # automatic claims skip it
     net.unlock_function("demo", "clamp_s32")
     assert not net.store.one("SELECT ignored FROM functions WHERE id=?", fn["id"])["ignored"]
+
+
+def test_unlock_all_stuck_functions_is_project_scoped_and_keeps_attempts(net):
+    functions = net.store.all("SELECT id FROM functions WHERE project_id=(SELECT id FROM projects WHERE slug='demo') LIMIT 2")
+    with net.store.tx() as db:
+        db.execute("UPDATE functions SET ignored=1, stalls=10 WHERE id IN (?,?)",
+                   (functions[0]["id"], functions[1]["id"]))
+        other = db.execute("INSERT INTO projects(slug,root,config) VALUES('other','/','{}')").lastrowid
+        db.execute("INSERT INTO functions(project_id,name,ignored,stalls) VALUES(?,?,1,10)", (other, "stuck"))
+        db.execute("INSERT INTO attempts(function_id,score,compiled) VALUES(?,?,1)", (functions[0]["id"], 40))
+
+    assert net.unlock_all_functions("demo") == 2
+    assert tuple(net.store.one("SELECT ignored, stalls FROM functions WHERE id=?", functions[0]["id"])) == (0, 0)
+    assert net.store.one("SELECT COUNT(*) AS n FROM attempts WHERE function_id=?", functions[0]["id"])["n"] == 1
+    assert net.store.one("SELECT ignored FROM functions WHERE name='stuck'")["ignored"]
+
+
+def test_reset_project_progress_clears_agent_data_but_keeps_imported_context_and_assembly(net, agents):
+    alice, _ = agents
+    fn = net.store.one("SELECT * FROM functions WHERE name='clamp_s32'")
+    asm_id = net.store.one("SELECT id FROM functions WHERE name='abs_s32'")["id"]
+    with net.store.tx() as db:
+        db.execute("UPDATE functions SET status='matched', best_score=0, best_source='matched', matched_source='matched', "
+                   "matched_agent_id=?, attempts=1, ignored=1, stalls=10 WHERE id=?", (alice.id, fn["id"]))
+        db.execute("UPDATE functions SET status='asm' WHERE id=?", (asm_id,))
+        db.execute("INSERT INTO attempts(function_id,agent_id,score,compiled,source,created_at) VALUES(?,?,?,?,?,0)",
+                   (fn["id"], alice.id, 40, 1, "attempt"))
+        db.execute("INSERT INTO notes(project_id,function_id,agent_id,text,created_at) VALUES(?,?,?,?,0)",
+                   (fn["project_id"], fn["id"], alice.id, "agent note"))
+        db.execute("INSERT INTO claims(function_id,agent_id,claimed_at,expires_at) VALUES(?,?,0,10)",
+                   (fn["id"], alice.id))
+        db.execute("INSERT INTO events(project_id,agent_id,kind,detail,created_at) VALUES(?,?,?,?,0)",
+                   (fn["project_id"], alice.id, "match", fn["name"]))
+        db.execute("INSERT INTO events(project_id,kind,detail,created_at) VALUES(?,'import','original import',0)",
+                   (fn["project_id"],))
+        db.execute("INSERT INTO twin_misses(function_id,source_hash,project_id,at) VALUES(?,?,?,0)",
+                   (fn["id"], "hash", fn["project_id"]))
+        original_context = db.execute("SELECT version, header FROM context_versions WHERE project_id=? "
+                                      "ORDER BY version LIMIT 1", (fn["project_id"],)).fetchone()
+
+    cleared = net.reset_project_progress("demo")
+
+    row = net.store.one("SELECT status,best_score,best_source,matched_source,matched_agent_id,attempts,abandons,stalls,ignored "
+                        "FROM functions WHERE id=?", fn["id"])
+    assert tuple(row) == ("open", None, None, None, None, 0, 0, 0, 0)
+    assert net.store.one("SELECT status FROM functions WHERE id=?", asm_id)["status"] == "asm"
+    assert cleared["attempts"] == 1 and cleared["notes"] == 1 and cleared["claims"] == 1
+    assert net.store.one("SELECT COUNT(*) AS n FROM attempts WHERE function_id=?", fn["id"])["n"] == 0
+    assert net.store.one("SELECT COUNT(*) AS n FROM notes WHERE project_id=?", fn["project_id"])["n"] == 0
+    assert net.store.one("SELECT COUNT(*) AS n FROM claims WHERE function_id=?", fn["id"])["n"] == 0
+    assert net.store.one("SELECT COUNT(*) AS n FROM twin_misses WHERE project_id=?", fn["project_id"])["n"] == 0
+    assert net.store.one("SELECT COUNT(*) AS n FROM events WHERE project_id=? AND kind='match'",
+                         fn["project_id"])["n"] == 0
+    assert tuple(net.store.one("SELECT version,header FROM context_versions WHERE project_id=? "
+                               "ORDER BY version LIMIT 1", fn["project_id"])) == tuple(original_context)
 
 
 def test_machine_workers_never_trigger_the_ignore_rule(net):
