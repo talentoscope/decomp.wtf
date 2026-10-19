@@ -19,6 +19,8 @@ REGIONS = {"North America": "North America", "Japan": "Japan", "Europe": "Europe
 def read_exe(data: bytes, boot_name: str = "") -> tuple[bytes, dict]:
     if data[:8] != b"PS-X EXE":
         raise RomError("this isn't a PlayStation executable")
+    if len(data) < 0x800:
+        raise RomError("the PlayStation executable header is truncated")
     pc, gp, load, size = struct.unpack_from("<IIII", data, 0x10)
     if not (0x80000000 <= load < 0x80200000) or size == 0 or 0x800 + size > len(data):
         raise RomError("the executable's header doesn't make sense (load address or size)")
@@ -64,7 +66,10 @@ class _Disc:
                 return src.read(n)
             self._get = get
         # 2048-byte sectors (.iso), raw 2352-byte ones (.bin: Mode 2 or Mode 1), or a CHD's frames (2352 + 96 of subcode)
-        for size, skip in ((2048, 0), (2352, 24), (2352, 16), (2448, 24), (2448, 16)):
+        geometry = getattr(src, "cue_geometry", None)
+        if geometry and geometry[1] is None:
+            raise RomError("an audio track is not an ISO9660 data track")
+        for size, skip in ([geometry] if geometry else ((2048, 0), (2352, 24), (2352, 16), (2448, 24), (2448, 16), (2336, 8))):
             pvd = 16 * size + skip
             if self._get(pvd + 1, 5) == b"CD001":
                 self.size, self.skip = size, skip
@@ -72,24 +77,30 @@ class _Disc:
         raise RomError("not a disc image this app can read (expected an ISO 9660 .bin, .iso or .chd)")
 
     def sector(self, lba: int) -> bytes:
-        return self._get(lba * self.size + self.skip, 2048)
+        if lba < 0:
+            raise RomError("negative disc sector")
+        data = self._get(lba * self.size + self.skip, 2048)
+        if len(data) != 2048:
+            raise RomError("disc sector is truncated or outside the selected track")
+        return data
 
     def read(self, lba: int, length: int) -> bytes:
+        if lba < 0 or length < 0:
+            raise RomError("invalid disc extent")
         if self.size == 2048:
             data = self._get(lba * 2048, length)
             if len(data) != length:
-                raise RomError(f"disc image ends before sector {lba}")
+                raise RomError("disc extent is truncated or outside the selected track")
             return data
         out = bytearray()
         while len(out) < length:
-            sector = self.sector(lba)
-            if len(sector) != 2048:
-                raise RomError(f"disc image ends before sector {lba}")
-            out += sector
+            out += self.sector(lba)
             lba += 1
         return bytes(out[:length])
 
     def entries(self, lba: int, length: int):
+        if not 0 <= length <= 8 << 20:
+            raise RomError("ISO directory exceeds its limits")
         raw = self.read(lba, length)
         i = 0
         while i < len(raw):
@@ -98,21 +109,27 @@ class _Disc:
                 i = (i // 2048 + 1) * 2048
                 continue
             rec = raw[i:i + n]
+            if n < 34 or len(rec) != n or i % 2048 + n > 2048 or 33 + rec[32] > n:
+                raise RomError("malformed ISO directory record")
             name = rec[33:33 + rec[32]].decode("ascii", "replace").split(";", 1)[0]
             if name not in ("\x00", "\x01"):
                 yield name.upper(), struct.unpack_from("<I", rec, 2)[0], struct.unpack_from("<I", rec, 10)[0], bool(rec[25] & 2)
             i += n
 
-    def find(self, path: str) -> bytes | None:
+    def find(self, path: str, max_bytes: int = 64 << 20) -> bytes | None:
         pvd = self.sector(16)
         lba, length = struct.unpack_from("<I", pvd, 156 + 2)[0], struct.unpack_from("<I", pvd, 156 + 10)[0]
         parts = [p for p in re.split(r"[\\/]", path.upper()) if p]
+        if len(parts) > 32:
+            raise RomError("ISO path exceeds its limits")
         for k, part in enumerate(parts):
             hit = next(((l, s, d) for name, l, s, d in self.entries(lba, length) if name == part), None)
             if hit is None:
                 return None
             lba, length, is_dir = hit
             if k == len(parts) - 1:
+                if length > max_bytes:
+                    raise RomError("disc file exceeds the extraction limit")
                 return None if is_dir else self.read(lba, length)
         return None
 
@@ -121,7 +138,7 @@ def from_disc(src) -> tuple[bytes, str, str]:
     """(program bytes, its file name, platform) from a PlayStation or PlayStation 2 disc image.
     SYSTEM.CNF names the program: `BOOT2 = cdrom0:\\SLUS_200.00;1` on PS2, `BOOT = cdrom:\\...` on PS1."""
     disc = _Disc(src)
-    cnf = disc.find("SYSTEM.CNF")
+    cnf = disc.find("SYSTEM.CNF", max_bytes=64 << 10)
     boot, platform = "PSX.EXE", "psx"
     if cnf is not None:
         m = re.search(rb"BOOT2\s*=\s*cdrom0?:?\\*([^\s;]+)", cnf, re.I)

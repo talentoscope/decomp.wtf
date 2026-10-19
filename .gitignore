@@ -15,7 +15,7 @@ projects/*/target/*.o
 export/
 .pytest_cache/
 
-# Website tooling and release artifacts (wheels are published to decomp.wtf/dl/, not kept in git)
+# Website tooling and release artifacts (wheels are GitHub release assets, not kept in git)
 site/node_modules/
 .wrangler/
 site/public/dl/*.whl

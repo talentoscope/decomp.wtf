@@ -172,3 +172,39 @@ def test_builds_find_decomp_wtfs_own_ninja(tmp_path, monkeypatch):
 def test_the_checksum_target_is_found_with_either_slash(tmp_path, target):
     (tmp_path / "build.ninja").write_text(f"build {target}: check config/G1E751/build.sha1\n", encoding="utf-8")
     assert ForkProject(tmp_path).check_target() == target
+
+
+def test_the_guide_tool_lists_every_guide_topic():
+    """The topic list in the guide tool's description comes from GUIDES (it used to name 9 of them)."""
+    import asyncio
+
+    from decompnet.app import tools
+
+    mcp = tools.build_mcp(None, lambda ctx: None)
+    desc = next(t.description for t in asyncio.run(mcp.list_tools()) if t.name == "guide")
+    assert all(topic in desc for topic in tools.GUIDES)
+
+
+@pytest.mark.parametrize("platform", ["n64", "psx", "ps2", "gba", "gb", "gbc", "sms", "gg"])
+def test_every_rom_platform_names_a_compiler_guide_that_exists(platform):
+    from decompnet.app import agents, tools
+    from decompnet.rom import detect
+
+    assert platform in detect.PLATFORMS
+    toolchain = {"n64": "gcc-2.7.2-kmc"}.get(platform, "gbdk-2020")
+    guide = agents.compiler_guide({"platform": platform, "compiler": {"toolchain": toolchain}})
+    assert guide in tools.GUIDES
+    assert guide == {"n64": "gcc-kmc", "psx": "psx", "ps2": "ps2", "gba": "agbcc", "gb": "gb", "gbc": "gb",
+                     "sms": "sms", "gg": "sms"}[platform]
+    assert agents.compiler_guide({"platform": "n64", "compiler": {"toolchain": "ido-7.1"}}) == "ido"
+
+
+def test_a_game_boy_helper_is_pointed_at_the_game_boy_guide():
+    """The helper prompt named "gcc-kmc" (the N64 compiler) as a Game Boy project's compiler guide."""
+    from decompnet.app.agents import Manager, Session
+
+    ov = {"kind": "rom", "title": "Some Game", "platform": "gb", "compiler": {"toolchain": "gbdk-2020"}}
+    manager = Manager.__new__(Manager)
+    manager.net = type("Net", (), {"overview": staticmethod(lambda slug: ov)})()
+    text = manager._prompt(Session("claude-1", "claude", "Claude Code #1", "game", "claude-1", {}))
+    assert "gcc-kmc" not in text and "workflow and gb guides" in text

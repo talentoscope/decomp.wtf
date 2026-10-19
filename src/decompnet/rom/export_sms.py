@@ -9,7 +9,6 @@ disassembly from the user's copy (code as instructions, the rest as bytes, a lab
 target), puts each documented routine in place of its bytes, assembles it with WLA-DX and checks it against the copy.
 """
 
-# Portions ported from SynapticDreams; Copyright (c) 2026 Sam Wolfs; MIT License (see licenses/synaptic-sms-MIT.txt).
 from __future__ import annotations
 
 import hashlib
@@ -24,6 +23,8 @@ from pathlib import Path
 from ..limits import capped
 from . import sms, sms_asm, sms_hw
 from .export_gb import NOTE_CHARS, NOTES_PER_LABEL, _documented
+from .sms_identity import verify_normalized
+from .sms_profile import describe
 
 LABEL = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")  # a name WLA-DX takes as a label
 WORD = re.compile(r"(?<![.@\w])[A-Za-z_]\w*")
@@ -35,6 +36,10 @@ def export_sms(net, slug: str, out: Path, log=print) -> dict:
     cfg = net.cfg(proj)
     rom_path = Path(proj["root"]) / cfg["rom"]["file"]
     image = sms.strip_copier_header(rom_path.read_bytes())
+    verify_normalized(image, cfg["rom"].get("identity"), cfg["rom"].get("sha1"))
+    profile = describe(cfg)
+    if profile["status"] == "invalid":
+        raise ValueError(profile["message"])
     if out.exists():
         for child in out.iterdir():
             if child.name != ".git":
@@ -86,14 +91,14 @@ def export_sms(net, slug: str, out: Path, log=print) -> dict:
         + sms_hw.inc(), encoding="utf-8")
     (out / "tools").mkdir(exist_ok=True)
     shutil.copyfile(Path(__file__).with_name("z80.py"), out / "tools" / "z80.py")
+    shutil.copyfile(Path(__file__).with_name("sms_identity.py"), out / "tools" / "sms_identity.py")
+    shutil.copyfile(Path(__file__).with_name("sms_mapping.py"), out / "tools" / "sms_mapping.py")
     (out / "build.json").write_text(json.dumps({"title": proj["name"], "platform": platform, "image": base,
-                                                "sha1": hashlib.sha1(image).hexdigest(), "size": len(image)},
+                                                "sha1": hashlib.sha1(image).hexdigest(), "size": len(image),
+                                                "identity": cfg["rom"].get("identity"),
+                                                "sms_profile": profile},
                                                indent=1), encoding="utf-8")
     shutil.copyfile(Path(__file__).with_name("export_sms_build.py"), out / "build.py")
-    license_dir = out / "licenses"
-    license_dir.mkdir(exist_ok=True)
-    license_file = Path(__file__).resolve().parents[3] / "licenses" / "synaptic-sms-MIT.txt"
-    shutil.copyfile(license_file, license_dir / license_file.name)
     (out / base).write_bytes(image)
     (out / ".gitignore").write_text(f"build/\n{base}\n__pycache__/\n", encoding="utf-8")
     _docs(out, proj["name"], base, matched, len(rows), len(entries))
@@ -109,7 +114,9 @@ def export_sms(net, slug: str, out: Path, log=print) -> dict:
     if left_out:
         log(f"{len(left_out)} documented routines left as the disassembly has them: "
             + "; ".join(f"{n}: {why}" for n, why in left_out[:6]))
-    return {"path": str(out), "identical": identical, "matched": matched, "functions": len(rows),
+    return {"path": str(out), "identical": identical, "sms_profile": profile,
+            "exact_original_intent": profile["exact_original_intent"],
+            "matched": matched, "functions": len(rows),
             "documented": len(entries) - sum(1 for n, _ in left_out if any(e["name"] == n for e in entries)),
             "left_out": left_out, "fallback": [], "log": (proc.stdout + proc.stderr)[-3000:]}
 
@@ -158,6 +165,11 @@ in assembly (in `documented/`), and {matched} are also matched in C (in `c/`).
    copy. Needs WLA-DX: decomp.wtf's pinned one when decomp.wtf is installed, else `wla-z80` and `wlalink` on `PATH`
    (or `WLA_DX` set to the folder that has them).
 
+The build includes the same cartridge resolver as the application. A declared supported model and an emitted
+instruction's CPU address can establish references within its own window; section placement does not establish
+other mapped banks. Undeclared or unresolved references remain numeric. Matching the entire image verifies its
+reconstruction independently of those mapping and naming limits.
+
 ## Layout
 
 | Path | What it is |
@@ -167,7 +179,7 @@ in assembly (in `documented/`), and {matched} are also matched in C (in `c/`).
 | `documented/` | Routines documented in assembly: names, comments and constants for what the disassembly has as numbers, each checked to rebuild its bytes. `build.py` puts each in place of its bytes; `names.inc` holds the names they use that aren't labels (RAM, constants). `python build.py --no-documented` builds without them. |
 | `include/hardware.inc` | The hardware's names the documented routines use (ports, the mapper's registers). |
 | `c/` | Functions matched in C: SDCC compiles each to exactly the original code. For reference: the build is the assembly. |
-| `tools/z80.py`, `build.py`, `build.json` | The disassembler, the build, and which game it's for. |
+| `tools/z80.py`, `tools/sms_identity.py`, `tools/sms_mapping.py`, `build.py`, `build.json` | The decoder, revision checks, shared mapper, build and input manifest. |
 
 `build/disassembly/` is made from your copy on every build, so keep your work in `layout.json`, `comments.txt` and
 `documented/`. To change the game itself, copy `build/disassembly/` elsewhere and edit it there (`game.asm` is the

@@ -96,7 +96,7 @@ def _string(data: bytes, at: int) -> bytes | None:
     return s if all(32 <= c < 127 or c in (9, 10, 13) for c in s[:-1]) else None
 
 
-def mismatches(target: Path, base: Path, symbol: str, insns: list[tuple[int, str]]) -> list[Mismatch]:
+def mismatches(target: Path, base: Path, symbol: str, insns: list[tuple[int, str]], *, base_symbol: str | None = None) -> list[Mismatch]:
     """Loaded constants that differ, for a function whose instructions match (`insns`: the original's (offset in
     the function, mnemonic), in order)."""
     try:
@@ -106,7 +106,7 @@ def mismatches(target: Path, base: Path, symbol: str, insns: list[tuple[int, str
     if left.machine != right.machine or left.machine not in ("EM_PPC", "EM_MIPS"):
         return []
     try:
-        a, b = left.refs(symbol), right.refs(symbol)
+        a, b = left.refs(symbol), right.refs(base_symbol or symbol)
     except Exception:  # an unusual object: no verdict rather than a wrong one
         return []
     if a is None or b is None:

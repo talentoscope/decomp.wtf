@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          python-version: '3.12'
+      - run: uv sync --locked
+      - name: Check versions and updater
+        run: |
+          uv run python tools/release.py check
+          uv run pytest -q tests/test_updates.py tests/test_installers.py tests/test_release.py
+          bash -n site/public/install.sh
+          sh -n site/public/linux-base.sh
+      - run: uv build --wheel
+      - name: Check PowerShell installers
+        shell: pwsh
+        run: |
+          foreach ($file in @('site/public/install.ps1', 'site/public/dev.ps1')) {
+            $parseErrors = $null
+            $tokens = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors) { throw ($parseErrors | Out-String) }
+          }
+
+  publish:
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          python-version: '3.12'
+      - name: Publish version once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="$(uv run python tools/release.py check)"
+          tag="v$version"
+          state="$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null || echo missing)"
+          if [ "$state" = false ]; then
+            echo "Release $tag already exists; bump the version for the next release."
+            exit 0
+          fi
+          uv build --wheel
+          uv run python tools/release.py notes > release-notes.md
+          if [ "$state" = missing ]; then
+            gh release create "$tag" --target "$GITHUB_SHA" --draft --title "decomp.wtf $tag" --notes-file release-notes.md
+          fi
+          gh release upload "$tag" dist/*.whl site/public/install.sh site/public/install.ps1 site/public/linux-base.sh site/public/decomp.ico --clobber
+          gh release edit "$tag" --draft=false --latest

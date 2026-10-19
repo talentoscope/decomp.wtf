@@ -1,0 +1,901 @@
+{
+  "version": 1,
+  "corpus_sha256": "556ff6158d8900b8857f9bfdfdf8a31922637ae4b327a3f672c8609e62edf4a7",
+  "recipes": {
+    "gcc-2.7.2-psx/native": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "b743f4e8fdb9542ffcde8baeab2422b3b3c33c7dd3edf346e84aae16167a28c7",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "340f744c575fcf2b462f427416fe292af248b614b536456853f87169c0535e04",
+        "code_bytes": 20,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "26cd3dd05e43f0d27887109a7097ba7e9356c7b67bfcc2055e4ec15678ecb64a",
+        "code_bytes": 36,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "3cb99350cf8f4f67294cd899329d3a490d108f05a7848b76d3ab6d0bfe7d8745",
+        "code_bytes": 24,
+        "data_bytes": 16
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "2f4c18b34226cfb946628f5145c711aa0429e7215549f90cbe9a40cca8f6515b",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "compiled",
+        "sha256": "413242cc220e7981219c6e0bb2908db6081ffa14a784dca89ccc00491fc0d6d0",
+        "code_bytes": 192,
+        "data_bytes": 32
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "aecddf8f3b30c61a8788636d3acb88834918836ef2fd4a495a0c54c47f2e0af6",
+        "code_bytes": 44,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "6084d37bab83099c17e4dbabb4e8e810b7d431c4683d22affc041a8c03f45073",
+        "code_bytes": 28,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.7.2-psx/2.56": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "42d898a540aa36d883fdbebfd349240ddb069ab39e902f3e12337219475c4446",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "847a9e191b190a8069be8033e109de2e2d6bbb5d233314ba433ce2a472db714a",
+        "code_bytes": 16,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "8f026083c0555544419082826f769ee21101c0da421e28ca2c5782462db3baeb",
+        "code_bytes": 32,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "7990f5d02282e964eaa4e35fd5351d04e07be3936c43b55d3a56a10307d4546f",
+        "code_bytes": 24,
+        "data_bytes": 4
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "db561b73323b57a03b0bfc2fe67b91aaf9f1227bd662f47b4a625bfb58a2332d",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "compiled",
+        "sha256": "6c5ae0b91ca77fedba459f57e85bbc83562da1403f65f529e3389e1a273799e7",
+        "code_bytes": 192,
+        "data_bytes": 32
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "7bd210c743c39ea7bd7daeea17cbe99db2539c17e0d7f2a7e31680e9373bdbda",
+        "code_bytes": 48,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "e117f2975c7e389b2892af0ecd5e6c5309519e0b2cced6e1d5116021efdb9b8d",
+        "code_bytes": 32,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.8.1-psx/native": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "b743f4e8fdb9542ffcde8baeab2422b3b3c33c7dd3edf346e84aae16167a28c7",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "340f744c575fcf2b462f427416fe292af248b614b536456853f87169c0535e04",
+        "code_bytes": 20,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "26cd3dd05e43f0d27887109a7097ba7e9356c7b67bfcc2055e4ec15678ecb64a",
+        "code_bytes": 36,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "3cb99350cf8f4f67294cd899329d3a490d108f05a7848b76d3ab6d0bfe7d8745",
+        "code_bytes": 24,
+        "data_bytes": 16
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "2f4c18b34226cfb946628f5145c711aa0429e7215549f90cbe9a40cca8f6515b",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "unsupported",
+        "reason": "The native binutils 2.6 assembler rejects explicit hi/lo operands for ASPSX local labels; use the ASPSX recipe for this case.",
+        "alternative": "ASPSX 2.56"
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "836010a4a87e88eb7f5321876b0fec737428e4fd0945610bdeffd7c8af1a8d66",
+        "code_bytes": 44,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "6084d37bab83099c17e4dbabb4e8e810b7d431c4683d22affc041a8c03f45073",
+        "code_bytes": 28,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.8.1-psx/2.56": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "42d898a540aa36d883fdbebfd349240ddb069ab39e902f3e12337219475c4446",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "847a9e191b190a8069be8033e109de2e2d6bbb5d233314ba433ce2a472db714a",
+        "code_bytes": 16,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "8f026083c0555544419082826f769ee21101c0da421e28ca2c5782462db3baeb",
+        "code_bytes": 32,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "7990f5d02282e964eaa4e35fd5351d04e07be3936c43b55d3a56a10307d4546f",
+        "code_bytes": 24,
+        "data_bytes": 4
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "db561b73323b57a03b0bfc2fe67b91aaf9f1227bd662f47b4a625bfb58a2332d",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "compiled",
+        "sha256": "0a9bd9d54bc29b4ff17443001ec2a70b953a19525fbe95093effa645c65c34f8",
+        "code_bytes": 196,
+        "data_bytes": 32
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "e068d9c88e3954ca8bca213b3704e2b3a0f678634c75a7dfcce0bbec9aa8b242",
+        "code_bytes": 44,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "e117f2975c7e389b2892af0ecd5e6c5309519e0b2cced6e1d5116021efdb9b8d",
+        "code_bytes": 32,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.5.7-psx/native": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "b743f4e8fdb9542ffcde8baeab2422b3b3c33c7dd3edf346e84aae16167a28c7",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "45d121d77924bc2f30d5999408e46b386c9a861579ebe27bcdfc538c8715e219",
+        "code_bytes": 16,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "7088b2d5b425ceaab802da75c9181f0e143e0e34e0aeb1842284315ca4dacb7e",
+        "code_bytes": 56,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "c7f8a4a8a31b7f332955b0a949bd8f578e19beb815a64878dd5b8294d070df37",
+        "code_bytes": 24,
+        "data_bytes": 16
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "2f4c18b34226cfb946628f5145c711aa0429e7215549f90cbe9a40cca8f6515b",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "compiled",
+        "sha256": "1c06d5c5ac10bed2b02f9987b599424d8b5bdcef4d033baec1e5a5e4901defbb",
+        "code_bytes": 196,
+        "data_bytes": 32
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "aecddf8f3b30c61a8788636d3acb88834918836ef2fd4a495a0c54c47f2e0af6",
+        "code_bytes": 44,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "6084d37bab83099c17e4dbabb4e8e810b7d431c4683d22affc041a8c03f45073",
+        "code_bytes": 28,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.5.7-psx/2.56": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "42d898a540aa36d883fdbebfd349240ddb069ab39e902f3e12337219475c4446",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "847a9e191b190a8069be8033e109de2e2d6bbb5d233314ba433ce2a472db714a",
+        "code_bytes": 16,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "f6ea624f6a3d895735c5d0e18530bdae89d742bdf9e3c5c93bdbed51381b0003",
+        "code_bytes": 56,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "d593bac6272a690b9fc89c9e6f17fb879ac523c7e8d2a3bfd55e63d9a574cb28",
+        "code_bytes": 24,
+        "data_bytes": 4
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "db561b73323b57a03b0bfc2fe67b91aaf9f1227bd662f47b4a625bfb58a2332d",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "compiled",
+        "sha256": "bcdc65bb3943f6fd03fa16fdbcdb645eba7644864a27fe51af89be3bf702dcf7",
+        "code_bytes": 196,
+        "data_bytes": 32
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "7ec2b53da6837e89cfa9035b08b9478609a08fcce9bc4b7a9d7b4ac18ba84897",
+        "code_bytes": 44,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "e117f2975c7e389b2892af0ecd5e6c5309519e0b2cced6e1d5116021efdb9b8d",
+        "code_bytes": 32,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.6.0-psx/native": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "b743f4e8fdb9542ffcde8baeab2422b3b3c33c7dd3edf346e84aae16167a28c7",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "340f744c575fcf2b462f427416fe292af248b614b536456853f87169c0535e04",
+        "code_bytes": 20,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "5d89176e7c1b66405cb4b0fb0f6b748d26e9bf1d6688cb1b6be507e07186555c",
+        "code_bytes": 36,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "c7f8a4a8a31b7f332955b0a949bd8f578e19beb815a64878dd5b8294d070df37",
+        "code_bytes": 24,
+        "data_bytes": 16
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "2f4c18b34226cfb946628f5145c711aa0429e7215549f90cbe9a40cca8f6515b",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "compiled",
+        "sha256": "413242cc220e7981219c6e0bb2908db6081ffa14a784dca89ccc00491fc0d6d0",
+        "code_bytes": 192,
+        "data_bytes": 32
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "aecddf8f3b30c61a8788636d3acb88834918836ef2fd4a495a0c54c47f2e0af6",
+        "code_bytes": 44,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "6084d37bab83099c17e4dbabb4e8e810b7d431c4683d22affc041a8c03f45073",
+        "code_bytes": 28,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.6.0-psx/2.56": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "42d898a540aa36d883fdbebfd349240ddb069ab39e902f3e12337219475c4446",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "847a9e191b190a8069be8033e109de2e2d6bbb5d233314ba433ce2a472db714a",
+        "code_bytes": 16,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "84da6261c05dd504a98bc5cea006dec7ac15efb23995b3f545fbf96c7be0a711",
+        "code_bytes": 32,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "d593bac6272a690b9fc89c9e6f17fb879ac523c7e8d2a3bfd55e63d9a574cb28",
+        "code_bytes": 24,
+        "data_bytes": 4
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "db561b73323b57a03b0bfc2fe67b91aaf9f1227bd662f47b4a625bfb58a2332d",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "compiled",
+        "sha256": "6c5ae0b91ca77fedba459f57e85bbc83562da1403f65f529e3389e1a273799e7",
+        "code_bytes": 192,
+        "data_bytes": 32
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "7bd210c743c39ea7bd7daeea17cbe99db2539c17e0d7f2a7e31680e9373bdbda",
+        "code_bytes": 48,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "e117f2975c7e389b2892af0ecd5e6c5309519e0b2cced6e1d5116021efdb9b8d",
+        "code_bytes": 32,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.6.3-psx/native": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "b743f4e8fdb9542ffcde8baeab2422b3b3c33c7dd3edf346e84aae16167a28c7",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "340f744c575fcf2b462f427416fe292af248b614b536456853f87169c0535e04",
+        "code_bytes": 20,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "5d89176e7c1b66405cb4b0fb0f6b748d26e9bf1d6688cb1b6be507e07186555c",
+        "code_bytes": 36,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "c7f8a4a8a31b7f332955b0a949bd8f578e19beb815a64878dd5b8294d070df37",
+        "code_bytes": 24,
+        "data_bytes": 16
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "2f4c18b34226cfb946628f5145c711aa0429e7215549f90cbe9a40cca8f6515b",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "compiled",
+        "sha256": "413242cc220e7981219c6e0bb2908db6081ffa14a784dca89ccc00491fc0d6d0",
+        "code_bytes": 192,
+        "data_bytes": 32
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "aecddf8f3b30c61a8788636d3acb88834918836ef2fd4a495a0c54c47f2e0af6",
+        "code_bytes": 44,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "6084d37bab83099c17e4dbabb4e8e810b7d431c4683d22affc041a8c03f45073",
+        "code_bytes": 28,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.6.3-psx/2.56": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "42d898a540aa36d883fdbebfd349240ddb069ab39e902f3e12337219475c4446",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "847a9e191b190a8069be8033e109de2e2d6bbb5d233314ba433ce2a472db714a",
+        "code_bytes": 16,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "84da6261c05dd504a98bc5cea006dec7ac15efb23995b3f545fbf96c7be0a711",
+        "code_bytes": 32,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "d593bac6272a690b9fc89c9e6f17fb879ac523c7e8d2a3bfd55e63d9a574cb28",
+        "code_bytes": 24,
+        "data_bytes": 4
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "db561b73323b57a03b0bfc2fe67b91aaf9f1227bd662f47b4a625bfb58a2332d",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "compiled",
+        "sha256": "6c5ae0b91ca77fedba459f57e85bbc83562da1403f65f529e3389e1a273799e7",
+        "code_bytes": 192,
+        "data_bytes": 32
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "7bd210c743c39ea7bd7daeea17cbe99db2539c17e0d7f2a7e31680e9373bdbda",
+        "code_bytes": 48,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "e117f2975c7e389b2892af0ecd5e6c5309519e0b2cced6e1d5116021efdb9b8d",
+        "code_bytes": 32,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.7.2-cdk/native": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "b743f4e8fdb9542ffcde8baeab2422b3b3c33c7dd3edf346e84aae16167a28c7",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "340f744c575fcf2b462f427416fe292af248b614b536456853f87169c0535e04",
+        "code_bytes": 20,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "26cd3dd05e43f0d27887109a7097ba7e9356c7b67bfcc2055e4ec15678ecb64a",
+        "code_bytes": 36,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "3cb99350cf8f4f67294cd899329d3a490d108f05a7848b76d3ab6d0bfe7d8745",
+        "code_bytes": 24,
+        "data_bytes": 16
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "2f4c18b34226cfb946628f5145c711aa0429e7215549f90cbe9a40cca8f6515b",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "unsupported",
+        "reason": "The native binutils 2.6 assembler rejects explicit hi/lo operands for ASPSX local labels; use the ASPSX recipe for this case.",
+        "alternative": "ASPSX 2.56"
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "aecddf8f3b30c61a8788636d3acb88834918836ef2fd4a495a0c54c47f2e0af6",
+        "code_bytes": 44,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "6084d37bab83099c17e4dbabb4e8e810b7d431c4683d22affc041a8c03f45073",
+        "code_bytes": 28,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.7.2-cdk/2.56": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "42d898a540aa36d883fdbebfd349240ddb069ab39e902f3e12337219475c4446",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "847a9e191b190a8069be8033e109de2e2d6bbb5d233314ba433ce2a472db714a",
+        "code_bytes": 16,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "8f026083c0555544419082826f769ee21101c0da421e28ca2c5782462db3baeb",
+        "code_bytes": 32,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "7990f5d02282e964eaa4e35fd5351d04e07be3936c43b55d3a56a10307d4546f",
+        "code_bytes": 24,
+        "data_bytes": 4
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "db561b73323b57a03b0bfc2fe67b91aaf9f1227bd662f47b4a625bfb58a2332d",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "compiled",
+        "sha256": "af0813d442f0209b2a882d00dea35d32acfb047b854baa340c91c5c06561fae3",
+        "code_bytes": 196,
+        "data_bytes": 32
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "7bd210c743c39ea7bd7daeea17cbe99db2539c17e0d7f2a7e31680e9373bdbda",
+        "code_bytes": 48,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "e117f2975c7e389b2892af0ecd5e6c5309519e0b2cced6e1d5116021efdb9b8d",
+        "code_bytes": 32,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.8.0-psx/native": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "b743f4e8fdb9542ffcde8baeab2422b3b3c33c7dd3edf346e84aae16167a28c7",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "340f744c575fcf2b462f427416fe292af248b614b536456853f87169c0535e04",
+        "code_bytes": 20,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "26cd3dd05e43f0d27887109a7097ba7e9356c7b67bfcc2055e4ec15678ecb64a",
+        "code_bytes": 36,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "3cb99350cf8f4f67294cd899329d3a490d108f05a7848b76d3ab6d0bfe7d8745",
+        "code_bytes": 24,
+        "data_bytes": 16
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "2f4c18b34226cfb946628f5145c711aa0429e7215549f90cbe9a40cca8f6515b",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "unsupported",
+        "reason": "The native binutils 2.6 assembler rejects explicit hi/lo operands for ASPSX local labels; use the ASPSX recipe for this case.",
+        "alternative": "ASPSX 2.56"
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "836010a4a87e88eb7f5321876b0fec737428e4fd0945610bdeffd7c8af1a8d66",
+        "code_bytes": 44,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "6084d37bab83099c17e4dbabb4e8e810b7d431c4683d22affc041a8c03f45073",
+        "code_bytes": 28,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.8.0-psx/2.56": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "42d898a540aa36d883fdbebfd349240ddb069ab39e902f3e12337219475c4446",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "847a9e191b190a8069be8033e109de2e2d6bbb5d233314ba433ce2a472db714a",
+        "code_bytes": 16,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "8f026083c0555544419082826f769ee21101c0da421e28ca2c5782462db3baeb",
+        "code_bytes": 32,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "7990f5d02282e964eaa4e35fd5351d04e07be3936c43b55d3a56a10307d4546f",
+        "code_bytes": 24,
+        "data_bytes": 4
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "db561b73323b57a03b0bfc2fe67b91aaf9f1227bd662f47b4a625bfb58a2332d",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "compiled",
+        "sha256": "0a9bd9d54bc29b4ff17443001ec2a70b953a19525fbe95093effa645c65c34f8",
+        "code_bytes": 196,
+        "data_bytes": 32
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "e068d9c88e3954ca8bca213b3704e2b3a0f678634c75a7dfcce0bbec9aa8b242",
+        "code_bytes": 44,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "e117f2975c7e389b2892af0ecd5e6c5309519e0b2cced6e1d5116021efdb9b8d",
+        "code_bytes": 32,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.91.66-psx/native": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "b743f4e8fdb9542ffcde8baeab2422b3b3c33c7dd3edf346e84aae16167a28c7",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "340f744c575fcf2b462f427416fe292af248b614b536456853f87169c0535e04",
+        "code_bytes": 20,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "5d89176e7c1b66405cb4b0fb0f6b748d26e9bf1d6688cb1b6be507e07186555c",
+        "code_bytes": 36,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "3cb99350cf8f4f67294cd899329d3a490d108f05a7848b76d3ab6d0bfe7d8745",
+        "code_bytes": 24,
+        "data_bytes": 16
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "0a72d9e5de9cb9b7fc9072e00114b3c44f58807519b164b38c990d4fc8f09dbe",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "unsupported",
+        "reason": "The native binutils 2.6 assembler rejects explicit hi/lo operands for ASPSX local labels; use the ASPSX recipe for this case.",
+        "alternative": "ASPSX 2.56"
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "8dee05015edcc0f464c4ddd7478af09ada883d8ff22119cc6aa6f0d08adb71f1",
+        "code_bytes": 44,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "6084d37bab83099c17e4dbabb4e8e810b7d431c4683d22affc041a8c03f45073",
+        "code_bytes": 28,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.91.66-psx/2.56": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "42d898a540aa36d883fdbebfd349240ddb069ab39e902f3e12337219475c4446",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "847a9e191b190a8069be8033e109de2e2d6bbb5d233314ba433ce2a472db714a",
+        "code_bytes": 16,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "84da6261c05dd504a98bc5cea006dec7ac15efb23995b3f545fbf96c7be0a711",
+        "code_bytes": 32,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "7990f5d02282e964eaa4e35fd5351d04e07be3936c43b55d3a56a10307d4546f",
+        "code_bytes": 24,
+        "data_bytes": 4
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "c61dc4ccf765c3dcae919145fd08bf1949886673f8122d21cedfa280c6bdfbd4",
+        "code_bytes": 40,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "compiled",
+        "sha256": "73a64080473e22c289a6f3f1f704dbfe45139b947027e7802378f55c7f43f6b3",
+        "code_bytes": 196,
+        "data_bytes": 32
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "13d80b1311e0c217a4abbb6d5010c73979d4878413cba0b3fcc04cb02e23db93",
+        "code_bytes": 44,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "e117f2975c7e389b2892af0ecd5e6c5309519e0b2cced6e1d5116021efdb9b8d",
+        "code_bytes": 32,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.95.2-psx/native": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "b743f4e8fdb9542ffcde8baeab2422b3b3c33c7dd3edf346e84aae16167a28c7",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "340f744c575fcf2b462f427416fe292af248b614b536456853f87169c0535e04",
+        "code_bytes": 20,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "5d89176e7c1b66405cb4b0fb0f6b748d26e9bf1d6688cb1b6be507e07186555c",
+        "code_bytes": 36,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "3cb99350cf8f4f67294cd899329d3a490d108f05a7848b76d3ab6d0bfe7d8745",
+        "code_bytes": 24,
+        "data_bytes": 16
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "f2a637217e7862bb563df8dc6785c832ef00715c636b686f38e3085a1716b6be",
+        "code_bytes": 36,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "unsupported",
+        "reason": "The native binutils 2.6 assembler rejects explicit hi/lo operands for ASPSX local labels; use the ASPSX recipe for this case.",
+        "alternative": "ASPSX 2.56"
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "0180c233b560416c93973286a68b2d0cded7b86faa61d377b543f2fb399b0145",
+        "code_bytes": 36,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "6084d37bab83099c17e4dbabb4e8e810b7d431c4683d22affc041a8c03f45073",
+        "code_bytes": 28,
+        "data_bytes": 0
+      }
+    },
+    "gcc-2.95.2-psx/2.56": {
+      "signed_narrow": {
+        "status": "compiled",
+        "sha256": "42d898a540aa36d883fdbebfd349240ddb069ab39e902f3e12337219475c4446",
+        "code_bytes": 24,
+        "data_bytes": 0
+      },
+      "plain_char_load": {
+        "status": "compiled",
+        "sha256": "847a9e191b190a8069be8033e109de2e2d6bbb5d233314ba433ce2a472db714a",
+        "code_bytes": 16,
+        "data_bytes": 0
+      },
+      "constant_division": {
+        "status": "compiled",
+        "sha256": "84da6261c05dd504a98bc5cea006dec7ac15efb23995b3f545fbf96c7be0a711",
+        "code_bytes": 32,
+        "data_bytes": 0
+      },
+      "gp_counter": {
+        "status": "compiled",
+        "sha256": "7990f5d02282e964eaa4e35fd5351d04e07be3936c43b55d3a56a10307d4546f",
+        "code_bytes": 24,
+        "data_bytes": 4
+      },
+      "copy_loop": {
+        "status": "compiled",
+        "sha256": "d22fb207e7743dd95f186e9e62ac8ba657edf5bba2ac64905085e323bfed6e04",
+        "code_bytes": 36,
+        "data_bytes": 0
+      },
+      "dense_switch": {
+        "status": "compiled",
+        "sha256": "73a64080473e22c289a6f3f1f704dbfe45139b947027e7802378f55c7f43f6b3",
+        "code_bytes": 196,
+        "data_bytes": 32
+      },
+      "aggregate_return": {
+        "status": "compiled",
+        "sha256": "2b23dab83ac4728776fe7a82bae36d974c5be75baf11752e7881ff7be34342e2",
+        "code_bytes": 36,
+        "data_bytes": 0
+      },
+      "gte_transform": {
+        "status": "compiled",
+        "sha256": "e117f2975c7e389b2892af0ecd5e6c5309519e0b2cced6e1d5116021efdb9b8d",
+        "code_bytes": 32,
+        "data_bytes": 0
+      }
+    }
+  }
+}

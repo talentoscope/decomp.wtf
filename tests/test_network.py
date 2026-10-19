@@ -1,3 +1,4 @@
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -337,3 +338,35 @@ def test_machine_workers_never_trigger_the_ignore_rule(net):
         for _ in range(8):
             net._record(fn, agent, 99, "x", 1, via="permuter" if name == "permuter" else "agent")
     assert not net.store.one("SELECT ignored FROM functions WHERE id=?", fn["id"])["ignored"]
+def test_the_same_c_that_just_failed_to_compile_isnt_compiled_again(tmp_path, monkeypatch):
+    """The compiler would say what it said last time: not worth a compile, nor a turn's worth of its output. And a C89
+    compiler's syntax error says it reads C89 (SDCC's never does: it reads C99)."""
+    from decompnet.app.engine import RomNetwork
+    from decompnet.compiler import CompileResult
+
+    net = RomNetwork(tmp_path / "d.db", tmp_path)
+    for pid, tc in ((1, "ido-7.1"), (2, "gbdk-2020")):
+        with net.store.tx() as db:
+            db.execute("INSERT INTO projects(id, slug, name, root, config) VALUES(?,?,?,?,?)",
+                       (pid, f"p{pid}", "p", str(tmp_path), json.dumps({"kind": "rom", "compiler": {"toolchain": tc}})))
+            db.execute("INSERT INTO functions(project_id, name, size, n_insns, target, relocs) VALUES(?,'f',4,1,?,'[]')",
+                       (pid, b"\0" * 4))
+            db.execute("INSERT INTO context_versions(project_id,version,header,agent_id,message,created_at,unit) "
+                       "VALUES(?,1,'',NULL,'',0,'')", (pid,))
+    compiles = []
+
+    def fail(proj, header, source):
+        compiles.append(source)
+        return CompileResult(False, None, "func.c:3: parse error before `int'")
+    monkeypatch.setattr(net, "_compile", fail)
+    agent, _ = net.local_agent("claude-1")
+    bad = "void f(void) {\n    g();\n    int x = 1;\n}"
+    out = net.compile_and_diff(agent, "f", bad, "p1")
+    assert "COMPILE ERROR" in out and "reads C89" in out
+    out = net.compile_and_diff(agent, "f", bad.replace("\n    ", "\n  "), "p1")  # spacing aside, the same C
+    assert out.startswith("❌ NOT COMPILED") and len(compiles) == 1
+    net.edit_context(agent, "p1", "", "void g(void);", "a prototype")  # another context.h: worth trying again
+    net.compile_and_diff(agent, "f", bad, "p1")
+    assert len(compiles) == 2
+    net.release(agent, "f", "", "p1")
+    assert "reads C89" not in net.compile_and_diff(agent, "f", bad, "p2")  # SDCC

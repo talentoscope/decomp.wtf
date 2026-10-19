@@ -25,7 +25,6 @@ write files, define macros or change how the rest assembles (.INCLUDE, .INCBIN, 
 .REPT...) are refused: agents' text is assembled on the user's computer.
 """
 
-# Portions ported from SynapticDreams; Copyright (c) 2026 Sam Wolfs; MIT License (see licenses/synaptic-sms-MIT.txt).
 from __future__ import annotations
 
 import re
@@ -152,15 +151,8 @@ def _tools() -> tuple[Path, Path]:
     if toolchains.installed("wla-dx") is None:
         raise AsmError("WLA-DX isn't installed (Setup lists it)")
     base = toolchains.path("wla-dx")
-    candidates = (
-        (base / "wla-z80.exe", base / "wlalink.exe"),
-        (base / "wla-z80", base / "wlalink"),
-        (base / "build" / "binaries" / "wla-z80", base / "build" / "binaries" / "wlalink"),
-    )
-    tools = next(((asm, link) for asm, link in candidates if asm.is_file() and link.is_file()), None)
-    if tools is None:
-        raise AsmError(f"WLA-DX is installed at {base}, but wla-z80 and wlalink are missing")
-    return tools
+    exe = ".exe" if (base / "wla-z80.exe").exists() else ""
+    return base / f"wla-z80{exe}", base / f"wlalink{exe}"
 
 
 def available() -> bool:

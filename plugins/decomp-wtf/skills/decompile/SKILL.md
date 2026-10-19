@@ -10,8 +10,8 @@ compiler, a judge that compiles your C and compares it with the game byte for by
 drafts, helper agents working in parallel, and a live view for the user. Its tools come from the `decomp` MCP server.
 
 1. **decomp.wtf installed?** If the `decomp` tools are unavailable, ask the user whether to install decomp.wtf
-   (free, open source, local): `curl -fsSL https://decomp.wtf/install.sh | bash` on Linux, or
-   `irm https://decomp.wtf/install.ps1 | iex` in PowerShell. Then restart this session so the tools load.
+   (free, open source, local): `curl -fsSL https://github.com/SynapticDreams/decomp.wtf/releases/latest/download/install.sh | bash` on Linux, or
+   `irm https://github.com/SynapticDreams/decomp.wtf/releases/latest/download/install.ps1 | iex` in PowerShell. Then restart this session so the tools load.
 2. **The game.** Work only with the user's own copy. Never download games or point to download sites. Ask the user
    to confirm the file is their own legally obtained copy, then `import_game(path, own_copy=true)`. If the game is
    already there, `list_projects()` and `open_project()`.

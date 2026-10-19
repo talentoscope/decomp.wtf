@@ -8,7 +8,6 @@ link uses (the compiled one for a Matching file, the original's otherwise); buil
 """
 
 import hashlib
-import json
 import shutil
 import subprocess
 import sys

@@ -7,6 +7,21 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const hex8 = (n) => "0x" + (n >>> 0).toString(16).toUpperCase().padStart(8, "0");
 const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 const pctOf = (best, insns) => (best == null ? null : Math.max(0, 1 - best / Math.max(1, insns * 100)));
+/* A project's progress against what can be matched: functions set aside (assembly no compiler makes, data the split
+   took for code) count apart, so a game written in assembly isn't stuck near 0% for good. */
+const progress = (p) => {
+  // (routines documented in assembly are done, apart from C: they count in neither)
+  const asm = p.asm || 0, doc = p.documented || 0, room = Math.max(0, (p.bytes || 0) - (p.asm_bytes || 0) - (p.documented_bytes || 0));
+  return { pct: room ? (100 * (p.matched_bytes || 0)) / room : 0, total: Math.max(0, (p.functions || 0) - asm - doc), room, asm, doc };
+};
+/* A banked game's map: how much of its ROM the project knows what it is (code, data). */
+const mappedText = (ov) => {
+  const m = ov.mapped;
+  if (!m || !m.rom) return "";
+  const pct = (100 * Math.min(m.rom, m.code + m.data)) / m.rom;
+  return `${pctNum(pct)}% of the ROM mapped${ov.sms_profile && !ov.sms_profile.supported ? " (provisional listing)" : ""}`;
+};
+const asideText = (n) => (n ? ` · ${n.toLocaleString()} set aside` : "");
 /* A match percentage that never reads 100% before the function really matches (99.6% stays 99.6%). */
 const pctText = (p) => (p >= 0.99 ? `${(Math.floor(p * 1000) / 10).toFixed(1)}%` : `${Math.floor(p * 100)}%`);
 const pctNum = (p) => (p < 10 ? p.toFixed(2) : p.toFixed(1));
@@ -22,6 +37,7 @@ function duration(h) { return h < 1 ? `${Math.max(1, Math.round(h * 60))} min` :
 function bytes(n) { return n >= 1 << 20 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} bytes`; }
 function money(usd) { return usd >= 10 ? `$${usd.toFixed(0)}` : `$${usd.toFixed(2)}`; }
 
+let apiRetried = false;
 async function api(path, { method = "GET", body, raw } = {}) {
   const opts = { method, headers: {} };
   if (method !== "GET") opts.headers["X-Decomp"] = "1";
@@ -30,6 +46,15 @@ async function api(path, { method = "GET", body, raw } = {}) {
   const res = await fetch(path, opts);
   let data = null;
   try { data = await res.json(); } catch { /* not json */ }
+  if (res.status === 401 && !apiRetried) {
+    // The app restarted and this tab's session key no longer matches. Reload once so the page
+    // re-enters (the app keeps its key across restarts now), instead of silently freezing on
+    // the last-known state; if the key genuinely changed, the app's own page explains how to
+    // reopen it — this tab never loops.
+    apiRetried = true;
+    location.reload();
+    return null;
+  }
   if (!res.ok) throw new Error((data && data.error) || `request failed (${res.status})`);
   return data;
 }
@@ -81,7 +106,7 @@ const S = {
   projects: [],
 };
 let projectGeneration = 0;
-const VIEWS = ["home", "catalog", "project", "agentsPage", "toolsPage", "settingsPage"];
+const VIEWS = ["home", "catalog", "rooms", "project", "agentsPage", "toolsPage", "settingsPage"];
 const TABS = ["overview", "functions", "agents", "activity", "team", "source", "settings"];
 
 /* The project folder in the computer's file manager (decomp.wtf in Docker says where it is instead). */
@@ -106,6 +131,7 @@ function route() {
   } else {
     leaveProject();
     if (h === "#/catalog") showCatalog();
+    else if (h === "#/rooms") showRooms();
     else if (h === "#/agents") showAgentsPage();
     else if (h === "#/tools") showToolsPage();
     else if (h === "#/settings") showSettingsPage();
@@ -147,19 +173,26 @@ function renderNav() {
   const box = $("navProjects");
   if (!S.projects.length) { box.innerHTML = `<p class="nav-empty">None yet: drop in a game.</p>`; return; }
   box.innerHTML = S.projects.map((p) => {
-    const pct = p.bytes ? (100 * p.matched_bytes) / p.bytes : 0;
+    const pct = progress(p).pct;
     const short = PLAT_SHORT[p.platform] || (p.platform_name || "").replace("Nintendo ", "") || "?";
     const state = p.working ? `<span class="dot on" title="${p.working} agent${p.working === 1 ? "" : "s"} working"></span>`
       : p.autopilot === "running" ? `<span class="dot work" title="autopilot running"></span>` : "";
-    if (p.broken) return `<a class="nav-proj broken" href="#/p/${esc(p.slug)}" data-slug="${esc(p.slug)}" title="${esc(p.broken)}">
-      <span class="np-top"><span class="np-name">${esc(p.title)}</span></span>
-      <span class="np-meta"><span>can't be opened: hover for why</span></span></a>`;
+    if (p.broken) return `<div class="nav-proj broken" data-slug="${esc(p.slug)}" title="${esc(p.broken)}">
+      <span class="np-top"><span class="np-name">${esc(p.title)}</span><button class="np-remove" type="button" data-remove="${esc(p.slug)}" title="Remove this project, then import the game again">Remove</button></span>
+      <span class="np-meta"><span>can't be opened: hover for why</span></span></div>`;
     return `<a class="nav-proj" href="#/p/${esc(p.slug)}" data-slug="${esc(p.slug)}" title="${esc(p.title)}">
       <span class="np-top"><span class="np-name">${esc(p.title)}</span>${state}${p.room ? `<span class="np-room" title="${p.room === "host" ? "you share this project" : "in a team room"}">●●</span>` : ""}</span>
       <span class="np-meta"><span>${esc(short)}</span><span class="grow"></span><span>${p.kind === "fork" && !p.ready ? "set up" : pctNum(pct) + "%"}</span></span>
       <span class="np-bar"><i data-w="${pct.toFixed(2)}"></i></span></a>`;
   }).join("");
   setWidths(box);
+  box.querySelectorAll("[data-remove]").forEach((b) => {
+    b.onclick = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const p = S.projects.find((x) => x.slug === b.dataset.remove);
+      askRemove(b.dataset.remove, p ? p.title : b.dataset.remove, p && p.broken);
+    };
+  });
   markNav();
 }
 setInterval(loadNav, 5000);
@@ -181,7 +214,7 @@ async function showHome() {
   box.innerHTML = "";
   $("recent").hidden = !st.projects.length;
   for (const p of st.projects) {
-    const pct = p.bytes ? (100 * p.matched_bytes) / p.bytes : 0;
+    const pr = progress(p), pct = pr.pct;
     const a = document.createElement("a");
     a.className = "card";
     a.href = `#/p/${p.slug}`;
@@ -196,7 +229,7 @@ async function showHome() {
       : `${esc(p.rom?.game_code || "")}${p.rom?.region ? " · " + esc(p.rom.region) : ""} · ${esc(p.compiler?.name || "")}`;
     a.innerHTML = `<div class="cc-top"><span class="plat">${esc(p.platform_name || "?")}</span><span class="meta">${esc(since(p.last_activity))}</span></div>
       <div><h4>${esc(p.title)}</h4><p class="meta">${meta}</p></div>
-      <div class="meter"><i></i></div><p class="meta"><b>${pctNum(pct)}%</b> of code · ${(p.matched || 0).toLocaleString()} / ${(p.functions || 0).toLocaleString()} functions</p>`;
+      <div class="meter"><i></i></div><p class="meta"><b>${pctNum(pct)}%</b> of code · ${(p.matched || 0).toLocaleString()} / ${pr.total.toLocaleString()} functions${asideText(pr.asm)}</p>`;
     box.append(a);
     requestAnimationFrame(() => { a.querySelector(".meter i").style.width = pct + "%"; });
   }
@@ -252,10 +285,8 @@ function parseRom(buf) {
 
 /* What the user dropped, from its first bytes (nothing is uploaded until they confirm). */
 const PLATFORM_NAME = { n64: "Nintendo 64", psx: "PlayStation", ps2: "PlayStation 2", playstation: "PlayStation 1 or 2",
-  gc: "GameCube", wii: "Wii", gcwii: "GameCube or Wii", gba: "Game Boy Advance",
-  gb: "Game Boy", gbc: "Game Boy Color", sms: "Sega Master System", gg: "Sega Game Gear", nds: "Nintendo DS" };
-const GB_LOGO = "CEED6666CC0D000B03730083000C000D0008111F8889000EDCCC6EE6DDDDD999BBBB67636E0EECCCDDDC999FBBB9333E"
-  .match(/../g).map((b) => Number.parseInt(b, 16));
+  gc: "GameCube", wii: "Wii", gcwii: "GameCube or Wii", gba: "Game Boy Advance", gb: "Game Boy",
+  gbc: "Game Boy Color", sms: "Sega Master System", gg: "Sega Game Gear", nes: "Nintendo Entertainment System", nds: "Nintendo DS" };
 const CW_PACK = {
   gcwii: { id: "mwcc", text: "Install CodeWarrior, the compilers GameCube and Wii games were built with (about 80 MB). It's proprietary software, kept by the decomp community: only if you accept that." },
   nds: { id: "mwccarm", text: "Install CodeWarrior for DS, the compilers DS games were built with (about 50 MB). It's proprietary software, kept by the decomp community: only if you accept that." },
@@ -270,6 +301,24 @@ function crc16(bytes, from, to) {
 }
 const MB = (n) => (n < 1048576 ? `${Math.max(1, Math.round(n / 1024))} KiB` : `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} MiB`);
 
+/* Master System / Game Gear: `TMR SEGA` at 0x7FF0 (0x3FF0 or 0x1FF0 in a ROM of 16 or 8 KiB), the region in the high nibble
+   of its last byte (5 and up is Game Gear). A file named .sms or .gg is taken without a header. 512 bytes of copier header
+   in front are skipped. The same checks the server makes (rom/sms.py). */
+function identifySega(head, file, stem, byName) {
+  const skip = file.size % 0x4000 === 0x200 ? 0x200 : 0;
+  const size = file.size - skip;
+  if (size < 0x2000 || size > 0x400000 || size % 0x2000) return null;
+  if (!byName) {
+    const off = size >= 0x8000 ? 0x7ff0 : size >= 0x4000 ? 0x3ff0 : 0x1ff0;  // the size decides the place
+    const at = skip + off;
+    if (size >= off + 0x10 && head.length >= at + 0x10 && String.fromCharCode(...head.slice(at, at + 8)) === "TMR SEGA") {
+      return { platform: (head[at + 0xf] >> 4) >= 5 ? "gg" : "sms", order: "cartridge", code: "", title: stem, size, header: true };
+    }
+    return null;
+  }
+  const ext = file.name.toLowerCase().match(/\.(sms|gg)$/);
+  return ext ? { platform: ext[1], order: "cartridge", code: "", title: stem, size, header: false } : null;
+}
 function identifyHead(head, file) {
   const dv = new DataView(head.buffer);
   const text = (a, b) => String.fromCharCode(...head.slice(a, b));
@@ -277,46 +326,38 @@ function identifyHead(head, file) {
   const stem = file.name.replace(/\.[^.]*$/, "");
   const base = { title: stem, size: file.size };
   if (text(0, 8) === "PS-X EXE") return { ...base, platform: "psx", order: "PS-X EXE", entry: dv.getUint32(0x10, true) };
+  // NES: "NES" and 0x1A, then the PRG size in 16 KiB units. The mapper is split across bytes 6 and 7 (byte 7 is junk when
+  // bytes 12-15 are not zero and it is not NES 2.0). The same reading the server makes (rom/nes.py).
+  if (head.length >= 16 && head[0] === 0x4e && head[1] === 0x45 && head[2] === 0x53 && head[3] === 0x1a && head[4] > 0 && file.size >= 16 + 0x2000) {
+    const nes2 = (head[7] & 0x0c) === 0x08, dirty = !nes2 && head.slice(12, 16).some((b) => b);
+    const mapper = (head[6] >> 4) | (dirty ? 0 : head[7] & 0xf0) | (nes2 ? (head[8] & 0x0f) << 8 : 0);
+    return { ...base, platform: "nes", order: nes2 ? "iNES (NES 2.0)" : "iNES", code: "", mapper, prg: head[4] * 16 };
+  }
+  // Game Boy / Game Boy Color: Nintendo logo at 0x104, header checksum over 0x134-0x14C, and a size
+  // that is a power-of-two number of 16 KiB banks. The same three checks the server makes (rom/gb.py).
+  if (head.length > 0x14d && head[0x104] === 0xce && head[0x105] === 0xed && head[0x106] === 0x66 && head[0x107] === 0x66) {
+    let sum = 0x19;
+    for (let i = 0x134; i < 0x14d; i++) sum += head[i];
+    const size = file.size;
+    if (((-sum) & 0xff) === head[0x14d] && size >= 0x8000 && size <= 0x800000 && (size & (size - 1)) === 0) {
+      const flag = head[0x143];
+      const color = (flag & 0x80) !== 0;
+      const title = (color ? ascii(0x134, 0x143) : ascii(0x134, 0x144)) || stem;
+      return { ...base, platform: color ? "gbc" : "gb", order: "cartridge", code: "", title, cgb: flag };
+    }
+  }
+  const sega = identifySega(head, file, stem, false);
+  if (sega) return { ...base, ...sega };
   if (head.length > 0xc0 && head[0xb2] === 0x96 && head[3] === 0xea) {  // GBA: fixed byte, header checksum, ARM branch
     let sum = 0;
     for (let i = 0xa0; i < 0xbd; i++) sum += head[i];
     if (((-(sum + 0x19)) & 0xff) === head[0xbd]) return { ...base, platform: "gba", order: "ROM", code: ascii(0xac, 0xb0), title: ascii(0xa0, 0xac) || stem };
   }
-  if (head.length >= 0x150 && file.size >= 0x8000 && file.size <= 0x800000 &&
-      (file.size & (file.size - 1)) === 0) {
-    const logo = GB_LOGO.every((b, i) => head[0x104 + i] === b);
-    let sum = 0;
-    for (let i = 0x134; i <= 0x14c; i++) sum = (sum - head[i] - 1) & 0xff;
-    if (logo && sum === head[0x14d]) {
-      const platform = head[0x143] & 0x80 ? "gbc" : "gb";
-      return { ...base, platform, order: "Banked ROM", title: ascii(0x134, 0x144) || stem };
-    }
-  }
-  const copier = file.size % 0x4000 === 0x200;
-  const romSize = file.size - (copier ? 0x200 : 0);
-  if (romSize >= 0x2000 && romSize <= 0x400000 && romSize % 0x2000 === 0) {
-    const header = romSize >= 0x8000 ? 0x7ff0 : romSize >= 0x4000 ? 0x3ff0 : 0x1ff0;
-    const at = header + (copier ? 0x200 : 0);
-    const magic = text(at, at + 8) === "TMR SEGA";
-    const region = magic ? head[at + 0xf] >>> 4 : 0;
-    if (magic && region >= 3 && region <= 7) {
-      const code = `${(head[at + 0xe] >>> 4).toString(16)}${head[at + 0xd].toString(16).padStart(2, "0")}${head[at + 0xc].toString(16).padStart(2, "0")}`;
-      const regions = { 3: "SMS Japan", 4: "SMS Export", 5: "GG Japan", 6: "GG Export", 7: "GG International" };
-      const sizes = { 10: 0x2000, 11: 0x4000, 12: 0x8000, 13: 0xc000, 14: 0x10000, 15: 0x20000, 0: 0x40000, 1: 0x80000, 2: 0x100000 };
-      return { ...base, title: stem, platform: region >= 5 ? "gg" : "sms", order: "Banked ROM",
-        size: romSize, code, region: regions[region], checksum: head[at + 0xa] | (head[at + 0xb] << 8),
-        checksum_ok: smsChecksum(head, at, romSize, copier), declared: sizes[head[at + 0xf] & 0xf] || null };
-    }
-    const ext = (file.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase() || "";
-    if (!magic && (ext === "sms" || ext === "gg")) {
-      return { ...base, platform: ext, order: "Banked ROM", size: romSize, region: "unknown" };
-    }
-  }
   if (head.length >= 0x200 && crc16(head, 0, 0x15e) === dv.getUint16(0x15e, true)) {  // DS: the header's own checksum
     const ram = dv.getUint32(0x28, true), entry = dv.getUint32(0x24, true);
     if (ram >= 0x02000000 && ram < 0x02400000 && entry >= ram) return { ...base, platform: "nds", order: "ROM", code: ascii(12, 16), title: ascii(0, 12) || stem, entry };
   }
-  if (text(0x8001, 0x8006) === "CD001" || text(0x9319, 0x931e) === "CD001" || text(0x9311, 0x9316) === "CD001") return { ...base, platform: "playstation", order: "disc image" };
+  if (text(0x8001, 0x8006) === "CD001" || text(0x9319, 0x931e) === "CD001" || text(0x9311, 0x9316) === "CD001" || text(0x9209, 0x920e) === "CD001") return { ...base, platform: "playstation", order: "disc image" };
   if (text(0, 8) === "MComprHD") return { ...base, platform: "playstation", order: "CHD disc image" };
   if (text(0, 4) === "\x7fELF" && head[5] === 1 && dv.getUint16(18, true) === 8) return { ...base, platform: "ps2", order: "ELF program", entry: dv.getUint32(24, true) };
   if (head.length > 0x60 && dv.getUint32(0x1c) === 0xc2339f3d) return { ...base, platform: "gc", order: "disc image", code: ascii(0, 6), title: ascii(0x20, 0x80) || stem };
@@ -334,7 +375,8 @@ function identifyHead(head, file) {
     }
     if (ok && used) return { ...base, platform: "gc", order: "program (DOL)", entry };
   }
-  return null;
+  const named = identifySega(head, file, stem, true);  // no header: the file's name decides
+  return named ? { ...base, ...named } : null;
 }
 
 function smsChecksum(head, at, size, copier) {
@@ -352,12 +394,13 @@ function smsChecksum(head, at, size, copier) {
 function notSupported(head, file) {
   const text = (a, b) => String.fromCharCode(...head.slice(a, b));
   const ext = (file.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase() || "";
-  if (text(0, 2) === "MZ") return "That's a Windows program. PC games aren't supported yet: decomp.wtf starts from N64, PlayStation 1 and 2, GameCube, Wii, Game Boy Advance and DS games.";
+  if (text(0, 2) === "MZ") return "That's a Windows program. PC games aren't supported yet: decomp.wtf starts from N64, PlayStation 1 and 2, GameCube, Wii, Game Boy, Game Boy Color, Game Boy Advance, NES, Master System, Game Gear and DS games.";
   if (text(0, 4) === "XEX2" || ext === "xex") return "That's an Xbox 360 program. Xbox 360 games aren't supported yet.";
   if (["nsp", "xci", "nso", "nro", "nca"].includes(ext) || text(0, 4) === "NSO0" || text(0, 4) === "PFS0") return "That's a Nintendo Switch file. Switch games aren't supported yet.";
   if (["sfc", "smc"].includes(ext)) return "That's a Super Nintendo ROM. SNES games were written in assembly, not compiled from C, so there's no C source to match.";
-  if (["nes", "md", "gen", "pce"].includes(ext)) return "Games for that console were written in assembly, not compiled from C, so there's no C source to match.";
-  if (ext === "cue") return "That's the .cue sheet: pick the .bin file next to it (the track with the game's data, usually Track 1).";
+  if (ext === "nes") return "That NES file has no iNES header (it should start with \"NES\" and a 0x1A byte), so decomp.wtf can't tell how its banks are laid out. Dumps in the UNIF or FDS formats aren't supported yet.";
+  if (["md", "gen", "sms", "gg", "pce"].includes(ext)) return "Games for that console were written in assembly, not compiled from C, so there's no C source to match.";
+  if (ext === "cue") return "Use the local-path option for a CUE sheet so the app can read every referenced track.";
   if (["zip", "7z", "rar"].includes(ext)) return "That's an archive: unpack it first, then drop the game file inside.";
   if (ext === "apk") return "Android apps aren't supported yet.";
   if (ext === "pbp" || ext === "cso") return "That's a PSP file. PSP games aren't supported yet.";
@@ -384,6 +427,16 @@ async function pickFile(file) {
   const facts = p === "n64"
     ? [["Game code", info.code || "—"], ["Region", info.region], ["Size", MB(info.size)], ["Format", info.order],
        ["Entry", hex8(info.entry)], ["Looks like", info.compiler === "IDO" ? "IDO" : "GCC (KMC)"]]
+    : (p === "gb" || p === "gbc")
+    ? [["Platform", PLATFORM_NAME[p]], ["Format", info.order], ["Size", MB(info.size)],
+       ["Cartridge", (info.cgb & 0x80) ? (info.cgb === 0xc0 ? "Color only" : "Color enhanced") : "original Game Boy"],
+       ["Project", "mgbdis"]]
+    : p === "nes"
+    ? [["Platform", PLATFORM_NAME[p]], ["Format", info.order], ["Size", MB(info.size)],
+       ["Mapper", `${info.mapper}, ${info.prg} KiB program`], ["Project", "decomp.wtf"]]
+    : (p === "sms" || p === "gg")
+    ? [["Platform", PLATFORM_NAME[p]], ["Format", info.order], ["Size", MB(info.size)],
+       ["Header", info.header ? "TMR SEGA" : "none (named by its extension)"], ["Project", "decomp.wtf"]]
     : [["Platform", PLATFORM_NAME[p]], ["Format", info.order], ["Size", MB(info.size)],
        info.region ? ["Region", info.region] : null,
        info.code ? ["Game ID", info.code] : ["Entry", info.entry != null ? hex8(info.entry) : "from the disc"],
@@ -396,7 +449,7 @@ async function pickFile(file) {
   $("romStatus").className = `plat-status ${level || ""}`;
   $("romStatus").innerHTML = level === "recommended"
     ? `<b>★ Recommended platform.</b> The most tested path to a full decomp you can port and mod.`
-    : `<b>Beta.</b> ${esc(PLATFORM_NAME[p] || "This platform")} works and is tested on homemade games, less so on real ones yet. Problems are worth <a href="https://github.com/i12bp8/decomp.wtf/issues" target="_blank" rel="noopener">reporting</a>.`;
+    : `<b>Beta.</b> ${esc(PLATFORM_NAME[p] || "This platform")} works and is tested on homemade games, less so on real ones yet. Problems are worth <a href="https://github.com/SynapticDreams/decomp.wtf/issues" target="_blank" rel="noopener">reporting</a>.`;
   setupCompilers(info);
   $("dropIdle").hidden = true;
   $("dropPicked").hidden = false;
@@ -411,8 +464,18 @@ function setupCompilers(info) {
   else if (p === "psx") fillCompilers(select, "gcc-2.7.2-psx", "PS1");
   else if (p === "ps2") fillCompilers(select, "ee-gcc-2.96", "PS2");
   else if (p === "gba") fillCompilers(select, "agbcc", "GBA");
-  else if (p === "gb" || p === "gbc") fillCompilers(select, "gbdk-2020", "Game Boy / Game Boy Color");
-  else if (p === "sms" || p === "gg") fillCompilers(select, "gbdk-2020", "Master System / Game Gear");
+  else if (p === "gb" || p === "gbc") {
+    $("compilerRow").hidden = true; note.hidden = false;
+    note.textContent = "Game Boy and Game Boy Color games are split with mgbdis and rgbds and matched with the pinned GBDK-2020 (SDCC) toolchain. decomp.wtf installs whichever of them is missing when you import. If that fails, the game is imported read-only (every function disassembled and searchable, but not handed out for matching), and importing it again once they are installed sets it right.";
+  }
+  else if (p === "nes") {
+    $("compilerRow").hidden = true; note.hidden = false;
+    note.textContent = "NES games are matched with the pinned GBDK-2020 (SDCC) toolchain's 6502 back end. decomp.wtf installs it when you import. Most commercial NES games were written in assembly, so expect to read, search and name their functions more than match them; homebrew built with GBDK-2020 or SDCC can match. If the toolchain can't be installed the game is imported read-only, and importing it again once it is installed sets it right.";
+  }
+  else if (p === "sms" || p === "gg") {
+    $("compilerRow").hidden = true; note.hidden = false;
+    note.textContent = "Master System and Game Gear games are matched with the pinned GBDK-2020 (SDCC) toolchain. decomp.wtf installs it when you import. If that fails, the game is imported read-only (every function disassembled and searchable, but not handed out for matching), and importing it again once it is installed sets it right.";
+  }
   else if (p === "playstation") {
     $("compilerRow").hidden = true; note.hidden = false;
     note.textContent = "The compiler is picked from the disc: PSY-Q-era GCC for PlayStation, EE-GCC for PlayStation 2. You can change it later.";
@@ -520,8 +583,9 @@ $("analyse").onclick = async () => {
 };
 $("pathPick").onclick = (e) => {
   e.stopPropagation();
-  const body = dialog("Use a file on this computer", `<p class="muted">For big disc images: decomp.wtf reads the file where it is instead of copying it through the browser.</p>
-    <label class="field"><span>Path to the game file</span><input id="ppPath" class="mono" placeholder="/home/me/games/my-game.iso"></label>
+  const body = dialog("Use a file on this computer", `<p class="muted">Use a local path for a disc image or CUE sheet. Keep the referenced binary tracks with the sheet.</p>
+    <label class="field"><span>Path to the game file</span><input id="ppPath" class="mono" placeholder="/path/to/disc.cue"></label>
+    <details><summary>CUE track options</summary><label class="field"><span>Track number (leave empty to detect)</span><input id="ppCueTrack" type="number" min="1" max="99"></label></details>
     <label class="check"><input type="checkbox" id="ppOwn"><span>This is my own copy of this game, obtained legally. The results stay with me for my own use.</span></label>
     <div class="row"><button class="primary" id="ppGo" type="button" disabled>Start decompiling</button><button class="ghost" data-close type="button">Cancel</button></div>`);
   body.querySelector("#ppOwn").onchange = () => { $("ppGo").disabled = !$("ppOwn").checked; };
@@ -529,7 +593,8 @@ $("pathPick").onclick = (e) => {
     const path = $("ppPath").value.trim();
     if (!path) return;
     $("dialog").hidden = true;
-    runImport(`confirmed=1&path=${encodeURIComponent(path)}`, undefined, "Analysing your game…");
+    const track = $("ppCueTrack").value;
+    runImport(`confirmed=1&path=${encodeURIComponent(path)}${track ? `&cue_track=${encodeURIComponent(track)}` : ""}`, undefined, "Analysing your game…");
   };
 };
 $("demoBtn").onclick = () => runImport("demo=1", undefined, "Opening Demo Quest 64…");
@@ -540,7 +605,7 @@ async function openProject(slug, tab = "overview") {
   show("project");
   S.slug = slug; S.e = 0; S.a = 0; S.seq = {}; S.scores = new Map(); S.flash = new Map(); S.sessions = []; S.claims = [];
   S.apFeed = null; S.stats = null; S.map = []; S.mapSig = null; geo = null;
-  $("activity").innerHTML = ""; $("thoughts").innerHTML = ""; $("now").innerHTML = ""; $("expLog").hidden = true; $("expResult").innerHTML = ""; $("teamBox").innerHTML = "";
+  $("activity").innerHTML = ""; $("thoughts").innerHTML = ""; setHtml($("now"), ""); $("expLog").hidden = true; $("expResult").innerHTML = ""; $("teamBox").innerHTML = "";
   try {
     if (!S.st) await loadState();
     const overview = await api(`/api/project?slug=${slug}`);
@@ -651,16 +716,23 @@ async function poll(first) {
     if (slug !== S.slug || generation !== projectGeneration) return;
     S.ov = live.overview;
     let mapDirty = false;
+    // Only news gets a toast: rejoining a room catches up on everything it did meanwhile, with the events' own
+    // (old) times, and a catch-up is one summary, not a toast per match.
+    const fresh = (ev) => !first && (!ev.created_at || Date.now() / 1000 - ev.created_at < 120);
+    const matches = [];
     for (const ev of live.events) {
       S.e = Math.max(S.e, ev.id);
-      if (["match", "split", "rename"].includes(ev.kind)) mapDirty = true;
-      if (ev.kind === "match" && !first) {
+      if (["match", "split", "merge", "rename", "reopen", "review", "documented", "reviewed"].includes(ev.kind)) mapDirty = true;
+      if (!fresh(ev)) continue;
+      if (ev.kind === "match") {
         S.flash.set(ev.detail, performance.now());
-        if (ev.agent !== AUTO && ev.agent !== "@" + AUTO) toast(`<code>${esc(ev.detail)}</code>&nbsp;matched by ${esc(ev.agent || "an agent")}`, "match");
+        if (ev.agent !== AUTO && ev.agent !== "@" + AUTO) matches.push(ev);
       }
-      if (ev.kind === "autopilot" && !first) toast(`Autopilot: ${esc(ev.detail)}`, "match");
-      if (ev.kind === "link" && !first) toast(`🔗 <code>${esc(ev.detail)}</code>&nbsp;is linked into the game`, "match");
+      if (ev.kind === "autopilot") toast(`Autopilot: ${esc(ev.detail)}`, "match");
+      if (ev.kind === "link") toast(`🔗 <code>${esc(ev.detail)}</code>&nbsp;is linked into the game`, "match");
     }
+    if (matches.length > 3) toast(`${matches.length} functions matched`, "match");
+    else for (const ev of matches) toast(`<code>${esc(ev.detail)}</code>&nbsp;matched by ${esc(ev.agent || "an agent")}`, "match");
     for (const at of live.attempts) {
       S.a = Math.max(S.a, at.id);
       if (!S.scores.has(at.function)) S.scores.set(at.function, []);
@@ -739,11 +811,11 @@ function renderHeader(ov) {
   if (comp) chips.push(`<span class="chip-s" title="${esc(fork ? "" : ov.compiler.flags.join(" "))}">${esc(comp)}</span>`);
   $("phChips").innerHTML = chips.join("");
   $("phTitle").textContent = ov.title;
-  const pct = ov.bytes ? (100 * ov.matched_bytes) / ov.bytes : 0;
+  const pr = progress(ov), pct = pr.pct;
   $("phPct").textContent = pctNum(pct);
   $("phBar").style.width = pct + "%";
   $("phSub").textContent = fork && !ov.ready ? "set up the project to start"
-    : `${ov.matched.toLocaleString()} / ${ov.functions.toLocaleString()} functions${linkedText(ov)} · ${plural(ov.attempts || 0, "compile")}${S.today ? ` · ${S.today} matched today` : ""}`;
+    : `${ov.matched.toLocaleString()} / ${pr.total.toLocaleString()} functions${pr.doc ? ` · ${pr.doc.toLocaleString()} documented` : ""}${asideText(pr.asm)}${linkedText(ov)} · ${plural(ov.attempts || 0, "compile")}${S.today ? ` · ${S.today} matched today` : ""}`;
   const w = workingAgents();
   $("phWorking").hidden = !w.n;
   $("phWorkingText").textContent = `${w.n} agent${w.n === 1 ? "" : "s"} working`;
@@ -779,7 +851,10 @@ function openTogether() {
     <label class="check"><input type="checkbox" id="tgApprove"><span>I let each new member in (they wait until I say yes)</span></label>
     <div class="row"><button class="primary" id="tgGo" type="button">Open the room</button><a class="link small" href="#/p/${esc(S.slug)}/team">More options: your own address (LAN, Tailscale, a server)</a></div>
     <pre class="joblog" id="tgLog" hidden></pre><div id="tgDone"></div>`);
-  body.querySelectorAll("[data-vis]").forEach((b) => { b.onclick = () => body.querySelectorAll("[data-vis]").forEach((x) => x.classList.toggle("on", x === b)); });
+  body.querySelectorAll("[data-vis]").forEach((b) => { b.onclick = () => {
+    body.querySelectorAll("[data-vis]").forEach((x) => x.classList.toggle("on", x === b));
+    body.querySelector("#tgApprove").checked = b.dataset.vis === "public";  // strangers can reach a public room
+  }; });
   body.querySelector("#tgGo").onclick = async (e) => {
     e.target.disabled = true;
     body.querySelector("#tgLog").hidden = false;
@@ -789,7 +864,7 @@ function openTogether() {
       const res = await followJob(job, body.querySelector("#tgLog"));
       body.querySelector("#tgLog").hidden = true;
       body.querySelector("#tgDone").innerHTML = `<p><b>The room is open.</b> Send this link to friends who own the game:</p>${cmdBox(res.link)}
-        <p class="muted small">They open decomp.wtf, choose <b>Join a team</b>, paste it and pick their own copy (or run <code>decomp join &lt;link&gt; &lt;their copy&gt; --name &lt;name&gt;</code>). The link works while this app is open; for a room that stays up, use your own address in the Team tab.</p>
+        <p class="muted small">They open decomp.wtf, choose <b>Join a team</b>, paste it and pick their own copy (or run <code>decomp join &lt;link&gt; &lt;their copy&gt; --name &lt;name&gt;</code>). The room opens again when this app starts again; its quick tunnel then has a new address, which members follow by themselves (the Team tab has the details, and your own address for a room that stays up).</p>
         <div class="row"><a class="primary small-btn as-btn" href="#/p/${esc(S.slug)}/team">See who's in</a></div>`;
       wireCopies(body.querySelector("#tgDone"));
       S.ov = await api(`/api/project?slug=${S.slug}`);
@@ -806,10 +881,13 @@ function linkedText(ov) {
 
 function renderStats(ov) {
   renderHeader(ov);
-  const pct = ov.bytes ? (100 * ov.matched_bytes) / ov.bytes : 0;
+  const pr = progress(ov), pct = pr.pct;
   $("pct").textContent = pctNum(pct);
-  $("pctSub").textContent = (ov.bytes ? `${bytes(ov.matched_bytes)} of ${bytes(ov.bytes)}` : "") + linkedText(ov) + (S.today ? ` · ${S.today} matched today` : "");
-  $("fnCount").textContent = `${ov.matched.toLocaleString()} / ${ov.functions.toLocaleString()}`;
+  $("pctSub").textContent = (pr.room ? `${bytes(ov.matched_bytes)} of ${bytes(pr.room)}` : "") + (pr.asm ? ` (${bytes(ov.asm_bytes)} set aside)` : "")
+    + linkedText(ov) + (S.today ? ` · ${S.today} matched today` : "")
+    + (ov.documented ? ` · ${plural(ov.documented, "routine")} documented (${bytes(ov.documented_bytes)})` : "")
+    + (ov.mapped ? ` · ${mappedText(ov)}` : "");
+  $("fnCount").textContent = `${ov.matched.toLocaleString()} / ${pr.total.toLocaleString()}`;
   renderAutopilot(ov);
   renderSteering(ov);
   if (S.tab === "source") renderSource(ov);
@@ -855,8 +933,8 @@ function renderCompilerNotice(ov) {
 }
 
 function fnCounts() {
-  const c = { matched: 0, working: 0, tried: 0, open: 0, asm: 0 };
-  for (const f of S.map) c[fnState(f)]++;
+  const c = { matched: 0, working: 0, tried: 0, open: 0, asm: 0, documented: 0 };
+  for (const f of S.map) { const k = fnState(f); c[k === "review" ? "asm" : k]++; }
   return c;
 }
 
@@ -865,10 +943,13 @@ function renderOverview() {
   if (!S.ov || S.tab !== "overview") return;
   const c = fnCounts(), total = Math.max(1, S.map.length);
   const seg = (k, cls) => (c[k] ? `<i class="${cls}" data-w="${(100 * c[k]) / total}" title="${c[k]} ${k === "open" ? "to do" : k}"></i>` : "");
-  $("fnStack").innerHTML = seg("matched", "s-match") + seg("working", "s-work") + seg("tried", "s-tried") + seg("asm", "s-asm") + seg("open", "s-open");
+  $("fnStack").innerHTML = seg("matched", "s-match") + seg("documented", "s-doc") + seg("working", "s-work") + seg("tried", "s-tried") + seg("asm", "s-asm") + seg("open", "s-open");
+  $("legendAsm").hidden = !c.asm;
+  $("legendDoc").hidden = !c.documented;
   setWidths($("fnStack"));
-  const togo = S.ov.functions - S.ov.matched;
-  $("fnSub").textContent = `${togo.toLocaleString()} to go${c.tried ? ` · ${c.tried.toLocaleString()} tried` : ""}${c.working ? ` · ${c.working} in progress` : ""}${c.asm ? ` · ${c.asm} assembly` : ""}`;
+  const togo = Math.max(0, S.ov.functions - S.ov.matched - c.asm - c.documented);  // what's set aside isn't to go
+  const todoc = S.ov.mapped ? S.ov.mapped.to_document : 0;
+  $("fnSub").textContent = `${togo.toLocaleString()} to go${c.tried ? ` · ${c.tried.toLocaleString()} tried` : ""}${c.working ? ` · ${c.working} in progress` : ""}${c.documented ? ` · ${c.documented.toLocaleString()} documented` : ""}${c.asm ? ` · ${c.asm.toLocaleString()} set aside (assembly or data)${todoc ? `, ${todoc.toLocaleString()} of them to document` : ""}` : ""}`;
   const st = S.stats;
   if (st) {
     const ph = st.matches_per_hour, max = Math.max(1, ...ph);
@@ -877,13 +958,50 @@ function renderOverview() {
     $("paceBars").innerHTML = ph.map((n, i) => `<rect x="${i * 10 + 1}" y="${28 - Math.max(n ? 3 : 1, (26 * n) / max)}" width="8" height="${Math.max(n ? 3 : 1, (26 * n) / max)}" rx="1.5" class="${n ? "on" : ""}"><title>${n} matched ${23 - i ? `${23 - i} h ago` : "this hour"}</title></rect>`).join("");
     $("paceSub").textContent = `matched in the last hour · ${plural(st.compiles_last_hour, "compile")}` + (last3 > 0 && togo > 0 ? ` · ≈ ${duration(togo / last3)} to go at this pace` : "");
     $("board").innerHTML = st.agents.length ? st.agents.slice(0, 8).map((r) => `<li><span class="who">${esc(r.agent)}</span><span class="grow"></span>
-        <span class="mono small">${r.matched ? `<b class="ok">${r.matched.toLocaleString()}</b> matched · ` : ""}${plural(r.compiles, "compile")}</span></li>`).join("")
+        <span class="mono small">${r.matched ? `<b class="ok">${r.matched.toLocaleString()}</b> matched · ` : ""}${r.points ? `<span title="percentage points its attempts made functions closer by">${r.points.toLocaleString()} pts</span> · ` : ""}${plural(r.compiles, "compile")}</span></li>`).join("")
       : `<li class="muted small">Nobody yet. Matches by agents, the autopilot and you show up here.</li>`;
+    renderCloser(st);
+    renderSetups(st);
   }
   const recent = S.map.filter((f) => f.status === "matched" && f.matched_at).sort((a, b) => b.matched_at - a.matched_at).slice(0, 8);
   $("recentMatches").innerHTML = recent.length ? recent.map((f) => `<li><span class="ok">✓</span>${fnLink(f.name)}<span class="grow"></span><span class="muted small">${esc(f.matched_by || "")} · ${esc(since(f.matched_at))}</span></li>`).join("")
     : `<li class="muted small">No matches yet.</li>`;
   $("recentMatches").querySelectorAll(".fn").forEach((x) => { x.onclick = () => openFn(x.dataset.fn); });
+}
+
+/* Progress short of matches (engine._progress): how close the best attempts are, and who got them there. */
+const SETUP_KIND = { claude: "Claude Code", codex: "Codex", api: "API", antigravity: "Antigravity", opencode: "OpenCode",
+  own: "your own agent", permuter: "permuter", room: "room member" };
+const STAGE_NAME = { fresh: "first tries", structural: "far off", mechanical: "close", near_miss: "near misses", escalated: "stuck" };
+const pctPts = (x) => `${Math.round(100 * x)}%`;
+
+function renderCloser(st) {
+  const c = st.closeness || { now: 0, per_hour: [], today: 0 };
+  const ph = c.per_hour || [], max = Math.max(0.01, ...ph);
+  $("closerBars").innerHTML = ph.map((n, i) => `<rect x="${i * 10 + 1}" y="${20 - Math.max(n ? 3 : 1, (18 * n) / max)}" width="8" height="${Math.max(n ? 3 : 1, (18 * n) / max)}" rx="1.5" class="${n ? "on" : ""}"><title>+${n.toFixed(2)} pts ${23 - i ? `${23 - i} h ago` : "this hour"}</title></rect>`).join("");
+  $("closerSub").textContent = `The best attempts so far reproduce ${c.now.toFixed(1)}% of the code C can match`
+    + (c.today ? ` (+${c.today.toFixed(1)} points in the last 24 hours).` : ".");
+  const rows = st.closer || [];
+  $("closerList").innerHTML = rows.length ? rows.map((r) => `<li>${fnLink(r.name)}<span class="mono small nowrap">${pctPts(r.from)} → <b>${pctPts(r.to)}</b></span><span class="grow"></span><span class="muted small">${esc(r.agent)}${r.model ? ` · ${esc(r.model)}` : ""} · ${esc(since(r.at))}</span></li>`).join("")
+    : `<li class="muted small">No big jumps yet: functions that get 5 points or more closer show up here.</li>`;
+  $("closerList").querySelectorAll(".fn").forEach((x) => { x.onclick = () => openFn(x.dataset.fn); });
+}
+
+function renderSetups(st) {
+  const rows = st.setups || [];
+  if (!rows.length) {
+    $("setups").innerHTML = `<p class="muted small">Each attempt is tagged with the agent, model and effort that made it, from this version on. Once helpers have worked a while, this compares them: points are percentage points of closeness gained, and points per attempt are compared on like work (functions as far along).</p>`;
+    return;
+  }
+  // under each setup, points per attempt by how far its functions already were: the fair comparison
+  const stages = (r) => Object.keys(STAGE_NAME).filter((k) => r.stages[k])
+    .map((k) => `<span title="${r.stages[k].attempts} attempts on functions that were ${esc(STAGE_NAME[k])}">${esc(STAGE_NAME[k])} <b>${r.stages[k].per_attempt.toFixed(1)}</b></span>`).join(" · ");
+  $("setups").innerHTML = `<table class="fn-table setups"><thead><tr><th>Setup</th><th class="r">Attempts</th><th class="r">Matches</th><th class="r">Points</th><th class="r">Per attempt</th></tr></thead><tbody>
+    ${rows.map((r) => `<tr class="setup"><td>${esc(SETUP_KIND[r.kind] || r.kind)}${r.model ? ` · <span class="mono">${esc(r.model)}</span>` : ""}${r.effort ? ` · ${esc(r.effort)}` : ""}${r.method ? ` · <b>${esc(r.method === "agent" ? "pinned" : r.method)}</b>` : ""}${r.tokens && r.points ? `<br><span class="muted small">${Math.round(r.tokens / r.points).toLocaleString()} tokens a point</span>` : ""}</td>
+      <td class="r mono">${r.attempts.toLocaleString()}</td><td class="r mono">${r.matches.toLocaleString()}</td><td class="r mono">${Math.round(r.points).toLocaleString()}</td>
+      <td class="r mono"><b>${r.per_attempt.toFixed(1)}</b></td></tr>
+      <tr class="stages"><td colspan="5" class="muted small">${stages(r)}</td></tr>`).join("")}</tbody></table>
+    <p class="muted small">Points per attempt on functions as far along (the line under each setup) is the fair comparison: tiered helpers give near misses to faster models and stuck functions to stronger ones, so totals mix different work.</p>`;
 }
 
 function renderAgentsKpi(ov) {
@@ -900,11 +1018,11 @@ function renderAgentsKpi(ov) {
 function renderNext(ov) {
   const box = $("nextStep");
   const w = workingAgents();
-  const done = ov.functions > 0 && ov.matched >= ov.functions;
+  const done = progress(ov).total > 0 && ov.matched >= progress(ov).total;  // everything that can be matched is
   const compilerOk = ov.kind === "fork" || ov.compiler.installed;
   if (done) {
     box.hidden = false;
-    box.innerHTML = `<div class="next-text"><b>Every function matches.</b><span class="muted small">Export the project: a source tree that rebuilds your game byte for byte.</span></div><a class="primary small-btn as-btn" href="#/p/${esc(S.slug)}/source">Export</a>`;
+    box.innerHTML = `<div class="next-text"><b>${ov.asm ? "Every function C can match is matched." : "Every function matches."}</b><span class="muted small">Export the project: a source tree that rebuilds your game byte for byte.</span></div><a class="primary small-btn as-btn" href="#/p/${esc(S.slug)}/source">Export</a>`;
     return;
   }
   if (ov.kind === "fork" && ov.ready && !ov.functions) {
@@ -927,8 +1045,11 @@ function renderNext(ov) {
   steps.push(`<span class="todo">○</span> Agents`, `<span class="todo">○</span> Export`);
   box.hidden = false;
   box.innerHTML = `<div class="next-text"><b>Next: start your agents</b><span class="steps-line">${steps.join("")}</span></div>
+    ${a && (a.installed || a.id === "api") ? focusSelect() : ""}
     ${a && (a.installed || a.id === "api") ? `<button class="primary" id="nextGo" type="button">${esc(launchLabel(a, LZ.model, LZ.count))}</button>` : ""}
     <button class="ghost" id="nextPick" type="button">Choose agent &amp; model</button>`;
+  const nextFocus = box.querySelector('[data-f="focus"]');
+  if (nextFocus) nextFocus.onchange = () => { LZ.focus = nextFocus.value; };
   const go = $("nextGo");
   if (go) go.onclick = () => a.id !== "api" ? startAgents(a, LZ.model, LZ.count, go)
     : (LZ.eps || []).length ? startAgents(a, "", LZ.count, go, { endpoints: LZ.eps }) : showLaunch();
@@ -942,12 +1063,19 @@ async function renderTeam() {
   clearInterval(teamTimer);
   if (!S.ov) return;
   const room = S.ov.room;
-  if (room && room.role === "guest") { renderGuest(box, room); teamTimer = setInterval(() => { if (S.tab === "team" && S.ov.room) renderGuest(box, S.ov.room); }, 4000); return; }
+  if (room && room.role === "guest") {
+    renderGuest(box, room);
+    teamTimer = setInterval(() => {
+      if (box.querySelector("details[open], #roomFollow:disabled")) return;  // reading the host's changes, or following them
+      if (S.tab === "team" && S.ov.room) renderGuest(box, S.ov.room);
+    }, 4000);
+    return;
+  }
   if (S.ov.kind === "fork" && !S.ov.ready) {
     box.innerHTML = `<h2 class="pane-title">Decompile together</h2>
       <p class="muted">Set the project up first (Overview): then friends who own the game can join it from their own decomp.wtf.</p>
       <div class="row"><button class="ghost" id="tmJoin" type="button">Join a team's room</button></div>`;
-    $("tmJoin").onclick = openJoin;
+    $("tmJoin").onclick = () => openJoin();
     return;
   }
   if (!box.firstElementChild) box.innerHTML = `<p class="muted">Looking at this computer's network…</p>`;
@@ -972,9 +1100,25 @@ function renderGuest(box, room) {
       : room.connected ? `You're <b>${esc(room.member)}</b>. Your agents claim functions through the room, so nobody does the same one twice; matches are checked and shared by the host.`
       : `${esc(room.error || "Waiting for the host…")} Your agents wait and carry on when it's back.`}</p>
     <dl class="facts"><div><dt>Host</dt><dd>${esc(room.host)}</dd></div><div><dt>Members</dt><dd>${members.length}</dd></div><div><dt>Online</dt><dd>${members.filter((m) => m.online).length}</dd></div></dl>
+    ${room.held ? `<div class="setup-group"><h3>The host changed the project's build setup</h3>
+      <p class="muted small">The room's newest commits change more than code: ${room.held.paths.slice(0, 6).map((f) => `<code>${esc(f)}</code>`).join(", ")}${room.held.paths.length > 6 ? ` and ${room.held.paths.length - 6} more` : ""}. Building the project runs them on this computer, so your copy stays where it was until you choose to follow. Look at the changes first; follow only a host you trust.</p>
+      <details class="logbox"><summary>What changes</summary><pre class="joblog">${esc(room.held.diff || "")}</pre></details>
+      <div class="row"><button class="primary small-btn" id="roomFollow" type="button">Follow the host</button></div><pre class="joblog" id="followLog" hidden></pre></div>` : ""}
     ${people ? `<div class="setup-group"><h3>In the room</h3>${people}</div>` : ""}
     <div class="row"><button class="ghost" id="roomReconnect" type="button">${room.connected ? "The host shared a new link?" : "Reconnect with a new link"}</button><button class="ghost danger" id="roomLeave" type="button">Leave room</button></div>`;
   $("roomReconnect").onclick = openReconnect;
+  if (room.held) $("roomFollow").onclick = async (e) => {
+    if (!confirm("Follow the host's changes to the build setup? Building the project runs them on this computer.")) return;
+    e.target.disabled = true;
+    $("followLog").hidden = false;
+    try {
+      const { job } = await api("/api/collab/follow", { method: "POST", body: { slug: S.slug, head: room.held.head } });
+      await followJob(job, $("followLog"));
+      toast("Following the host again.", "match");
+      S.ov = await api(`/api/project?slug=${S.slug}`);
+      renderGuest(box, S.ov.room);
+    } catch (err) { toast(esc(err.message), "err"); e.target.disabled = false; }
+  };
   $("roomLeave").onclick = async () => {
     if (!confirm("Leave this room? Your local copy of the project stays; it stops syncing.")) return;
     await api("/api/collab/leave", { method: "POST", body: { slug: S.slug } }).catch((e) => toast(esc(e.message), "err"));
@@ -986,12 +1130,19 @@ function renderHost(box, info) {
     <p class="muted">Your team works on this game from their own computers, each with <b>their own copy of exactly this game</b> (decomp.wtf checks it's identical) and their own agents. This computer is the room's host: it keeps the shared work and checks every match against your copy.${S.ov.kind === "fork" ? " Members get this project's source tree from you (only what git tracks: never your game or its extracted files) and follow every commit made here." : ""} Only the work travels, never ROM data. You host the room and decide who's in.</p>`;
   const opts = (inf) => `<div class="setup-group"><h3>Who can join</h3>
       <div class="seg" id="visSeg"><button type="button" data-vis="private" class="${inf.settings.visibility !== "public" ? "on" : ""}">Private: invite link</button><button type="button" data-vis="public" class="${inf.settings.visibility === "public" ? "on" : ""}">Public: anyone with the address</button></div>
-      <label class="check"><input type="checkbox" id="apprChk" ${inf.settings.approve ? "checked" : ""}><span>I let each new member in (they wait until you approve)</span></label></div>`;
+      <label class="check"><input type="checkbox" id="apprChk" ${inf.settings.approve ? "checked" : ""}><span>I let each new member in (they wait until you approve)</span></label>
+      <label class="field"><span>At most this many members (0: no limit)</span><input id="limitIn" class="mono port" type="number" min="0" value="${inf.settings.limit || 0}"></label>
+      ${inf.mode === "address" && inf.sharing ? "" : `<label class="check"><input type="checkbox" id="findChk" ${inf.settings.findable !== false ? "checked" : ""}><span>Members find the room again when its quick tunnel's address changes: the room keeps its address, signed with its own key, in a secret gist on your GitHub account (members can see which account).</span></label>
+      ${inf.settings.findable === false ? "" : inf.github ? `<div class="row"><span class="ok-mark">On GitHub as ${esc(inf.github)}</span><button class="ghost small-btn" id="ghOff" type="button">Disconnect</button></div>`
+        : `<label class="field"><span>A GitHub token that can only make gists: <a href="https://github.com/settings/tokens/new?scopes=gist&amp;description=decomp.wtf%20rooms" target="_blank" rel="noopener">make one</a> (a classic token, the gist scope only)</span><input id="ghToken" class="mono" type="password" autocomplete="off" placeholder="ghp_…"></label>
+          <div class="row"><button class="ghost small-btn" id="ghGo" type="button">Connect GitHub</button></div>`}`}
+      ${inf.sharing && inf.mode !== "address" && inf.settings.findable !== false ? `<p class="muted small">${!inf.github ? "Until you connect GitHub, members paste the new link when the address changes."
+        : inf.published ? `Members follow it to ${esc(inf.published.url)} (your gist says so).` : inf.publish_error ? `Couldn't write the gist yet (${esc(inf.publish_error)}); trying again in a while. Until then members paste the new link.` : "Writing where it is to your gist…"}</p>` : ""}</div>`;
   if (!info.sharing) {
     const sugg = (info.addresses || []).map((a) => `<button type="button" class="chip" data-addr="${esc(a.address)}">${esc(a.label)}: <span>${esc(a.address)}</span></button>`).join("");
     box.innerHTML = `${intro}${info.was_sharing ? `<div class="notice"><span>This room was shared before the app restarted. Share it again: members keep their place.</span></div>` : ""}
       <div class="setup-group"><h3>How teammates reach this computer</h3>
-        <label class="check"><input type="radio" name="mode" value="tunnel" ${info.mode !== "address" ? "checked" : ""} ${info.tunnel_supported ? "" : "disabled"}><span><b>Quick tunnel</b>: works from anywhere, nothing to set up (Cloudflare's free tunnel). The address changes when the app restarts; members then paste the new link.</span></label>
+        <label class="check"><input type="radio" name="mode" value="tunnel" ${info.mode !== "address" ? "checked" : ""} ${info.tunnel_supported ? "" : "disabled"}><span><b>Quick tunnel</b>: works from anywhere, nothing to set up (Cloudflare's free tunnel, for testing: no uptime promised). Its address changes when the app restarts or the tunnel drops; decomp.wtf opens a new one by itself, and members follow it.</span></label>
         <label class="check"><input type="radio" name="mode" value="address" ${info.mode === "address" ? "checked" : ""}><span><b>An address you control</b>: this network, Tailscale, or a server with its own domain. It stays the same, so the room reopens by itself after a restart.</span></label>
         <div id="addrBox" ${info.mode === "address" ? "" : "hidden"}>
           <label class="field"><span>The address teammates use (the room listens on port <input id="addrPort" class="mono port" type="number" value="${info.port || 6481}">)</span><input id="addrIn" class="mono" placeholder="http://192.168.1.20:6481" value="${esc(info.address || "")}"></label>
@@ -1000,7 +1151,11 @@ function renderHost(box, info) {
       <div class="row"><button class="primary" id="startShare" type="button">Start sharing</button></div><pre class="joblog" id="shareLog" hidden></pre>`;
     box.querySelectorAll('[name="mode"]').forEach((r) => { r.onchange = () => { box.querySelector("#addrBox").hidden = r.value !== "address" || !r.checked; }; });
     box.querySelectorAll("[data-addr]").forEach((b) => { b.onclick = () => { box.querySelector("#addrIn").value = b.dataset.addr; }; });
-    box.querySelectorAll("[data-vis]").forEach((b) => { b.onclick = () => box.querySelectorAll("[data-vis]").forEach((x) => x.classList.toggle("on", x === b)); });
+    box.querySelectorAll("[data-vis]").forEach((b) => { b.onclick = () => {
+      box.querySelectorAll("[data-vis]").forEach((x) => x.classList.toggle("on", x === b));
+      box.querySelector("#apprChk").checked = b.dataset.vis === "public";  // strangers can reach a public room
+    }; });
+    wireGithub(box, async () => renderHost(box, await api(`/api/collab?slug=${S.slug}`)));
     box.querySelector("#startShare").onclick = async () => {
       const mode = box.querySelector('[name="mode"]:checked')?.value || "tunnel";
       const visibility = box.querySelector("[data-vis].on")?.dataset.vis || "private";
@@ -1008,7 +1163,9 @@ function renderHost(box, info) {
       box.querySelector("#startShare").disabled = true;
       try {
         const { job } = await api("/api/collab/start", { method: "POST", body: { slug: S.slug, mode, visibility,
-          approve: box.querySelector("#apprChk").checked, address: box.querySelector("#addrIn")?.value || "",
+          approve: box.querySelector("#apprChk").checked, limit: Number(box.querySelector("#limitIn").value) || 0,
+          findable: box.querySelector("#findChk") ? box.querySelector("#findChk").checked : undefined,
+          address: box.querySelector("#addrIn")?.value || "",
           port: Number(box.querySelector("#addrPort")?.value) || 6481, keep: info.was_sharing } });
         await followJob(job, box.querySelector("#shareLog"));
         renderHost(box, await api(`/api/collab?slug=${S.slug}`));
@@ -1024,10 +1181,15 @@ function renderHost(box, info) {
   const waiting = (info.pending || []).map((p) => `<div class="line-item"><div class="txt"><b>${esc(p.name)}</b><span>asks to join</span></div>
       <button class="primary small-btn" data-approve="${esc(p.name)}" type="button">Let in</button><button class="ghost small-btn" data-decline="${esc(p.name)}" type="button">Decline</button></div>`).join("");
   box.innerHTML = `${intro}<label class="field"><span>${info.settings.visibility === "public" ? "The room's address (anyone with it and their own copy of the game can join)" : "Invite link (send it to teammates who own this game)"}</span></label>${cmdBox(info.link || "")}
-    <p class="muted small">${info.mode === "address" ? "Shared at your own address: the room reopens by itself when this app restarts." : "Shared through a quick tunnel: the address changes if this app restarts."} Teammates choose <i>Join a team</i> in decomp.wtf, or run <code>decomp join &lt;link&gt; &lt;their copy&gt; --name &lt;name&gt;</code>.</p>
+    <p class="muted small">${info.mode === "address" ? "Shared at your own address: the room reopens by itself when this app restarts." : "Shared through a quick tunnel: its address changes when this app restarts or the tunnel drops, and decomp.wtf opens a new one by itself."} Teammates choose <i>Join a team</i> in decomp.wtf, or run <code>decomp join &lt;link&gt; &lt;their copy&gt; --name &lt;name&gt;</code>.</p>
     ${waiting ? `<div class="setup-group"><h3>Waiting to join</h3>${waiting}</div>` : ""}
     <div class="setup-group"><h3>In the room · ${members.length} member${members.length === 1 ? "" : "s"}, ${online} online</h3>${people || `<p class="muted small">Nobody yet.</p>`}</div>
     ${opts(info)}
+    ${info.settings.visibility === "public" ? `<div class="setup-group"><h3>On the public room list</h3>
+      <p class="muted small">Anyone can find a listed room in <b>Open rooms</b>: its platform, product code, progress and members, never the game's title. Listing opens an issue on GitHub for you to submit (signed in); the list checks the room and adds it within a few minutes, and takes it off when it stays away for a week.${info.mode !== "address" ? " A room on a quick tunnel needs GitHub connected above, so the list can find it when its address changes." : ""}</p>
+      <label class="field"><span>A line about the room (optional)</span><input id="listNote" maxlength="200" placeholder="e.g. starting with the menus; matches by hand welcome"></label>
+      <div class="row"><button class="primary small-btn" id="listGo" type="button">List it</button><button class="ghost small-btn" id="unlistGo" type="button">Take it off the list</button></div>
+      <div id="listOut"></div></div>` : ""}
     <div class="setup-group"><h3>Keep it open</h3><div class="row" id="svcRow"><span class="muted small">Checking…</span></div></div>
     <div class="row"><button class="ghost" id="rotate" type="button">New invite link</button><button class="ghost danger" id="stopShare" type="button">Stop sharing</button></div>`;
   wireCopies(box);
@@ -1040,12 +1202,44 @@ function renderHost(box, info) {
   box.querySelectorAll("[data-decline]").forEach((b) => { b.onclick = () => manage({ action: "decline", name: b.dataset.decline }); });
   box.querySelectorAll("[data-vis]").forEach((b) => { b.onclick = () => manage({ action: "settings", visibility: b.dataset.vis }); });
   box.querySelector("#apprChk").onchange = (e) => manage({ action: "settings", approve: e.target.checked });
+  box.querySelector("#limitIn").onchange = (e) => manage({ action: "settings", limit: Number(e.target.value) || 0 });
+  const find = box.querySelector("#findChk");
+  if (find) find.onchange = (e) => manage({ action: "settings", findable: e.target.checked });
+  wireGithub(box, async () => renderHost(box, await api(`/api/collab?slug=${S.slug}`)));
+  for (const [id, action] of [["listGo", "list"], ["unlistGo", "unlist"]]) {
+    const b = box.querySelector(`#${id}`);
+    if (b) b.onclick = async () => {
+      try {
+        const r = await api("/api/collab/listing", { method: "POST", body: { slug: S.slug, action, note: box.querySelector("#listNote").value } });
+        box.querySelector("#listOut").innerHTML = `<p class="small">${action === "list" ? "Submit this issue on GitHub to list the room" : "Submit this issue on GitHub to take the room off the list"} (it's filled in with a listing signed by the room's key):</p>
+          <div class="row"><a class="primary small-btn as-btn" href="${esc(r.url)}" target="_blank" rel="noopener">Open the issue on GitHub</a></div>
+          <p class="muted small">Or open a new issue in ${esc(r.repo)} and paste this:</p>${cmdBox(r.listing)}`;
+        wireCopies(box.querySelector("#listOut"));
+      } catch (e) { toast(esc(e.message), "err"); }
+    };
+  }
   box.querySelector("#rotate").onclick = () => { if (confirm("Make a new invite link? The old one stops working for people who haven't joined yet; members stay in.")) manage({ action: "rotate" }); };
   box.querySelector("#stopShare").onclick = async () => {
     await api("/api/collab/stop", { method: "POST", body: { slug: S.slug } });
     renderHost(box, await api(`/api/collab?slug=${S.slug}`));
   };
   serviceRow(box.querySelector("#svcRow"), "The room is open while decomp.wtf runs.");
+}
+
+/* Connect GitHub for the gists that say where rooms are now (identity.py), or disconnect it. */
+function wireGithub(box, then) {
+  const go = box.querySelector("#ghGo"), off = box.querySelector("#ghOff");
+  if (go) go.onclick = async () => {
+    const token = box.querySelector("#ghToken").value.trim();
+    if (!token) return toast("Paste a GitHub token with the gist scope.", "err");
+    go.disabled = true;
+    try { const r = await api("/api/github", { method: "POST", body: { token } }); toast(`On GitHub as ${esc(r.github)}.`, "match"); await then(); }
+    catch (e) { toast(esc(e.message), "err"); go.disabled = false; }
+  };
+  if (off) off.onclick = async () => {
+    if (!confirm("Disconnect GitHub? Rooms stop saying where they are; members paste the new link when it changes.")) return;
+    try { await api("/api/github", { method: "DELETE" }); await then(); } catch (e) { toast(esc(e.message), "err"); }
+  };
 }
 
 /* Start decomp.wtf with the computer (systemd user service, launchd, or a log-on task). */
@@ -1084,14 +1278,16 @@ function openReconnect() {
   };
 }
 
-function openJoin() {
-  const body = dialog("Join a team's room", `<p class="muted">Paste the invite link (or a public room's address), then pick <b>your own copy</b> of the same game. decomp.wtf checks it's identical to the host's; your copy itself is never sent.</p>
-    <label class="field"><span>Invite link</span><input id="jLink" class="mono" placeholder="https://….trycloudflare.com/join/…"></label>
+function openJoin(prefill = "", about = "") {
+  const body = dialog("Join a team's room", `<p class="muted">Paste the invite link (or a public room's address), then pick <b>your own copy</b> of the same game. decomp.wtf checks it's identical to the host's; your copy itself is never sent.${prefill ? "" : ` Or find one in <a href="#/rooms" data-close>Open rooms</a>.`}</p>
+    ${about ? `<p class="small">${about}</p>` : ""}
+    <label class="field"><span>Invite link</span><input id="jLink" class="mono" placeholder="https://….trycloudflare.com/join/…" value="${esc(prefill)}"></label>
     <label class="field"><span>Your name in the room</span><input id="jName" maxlength="24" placeholder="e.g. alex"></label>
     <label class="field"><span>Your copy of the game</span><input id="jRom" type="file"></label>
     <label class="field"><span>…or its path on this computer (best for a GameCube or Wii disc: it's read where it is)</span><input id="jPath" class="mono" placeholder="${S.st && S.st.host_os === "windows" ? "C:\\Games\\game.rvz" : "/home/you/games/game.iso"}"></label>
     <label class="check"><input type="checkbox" id="jOwn"><span>This is my own copy of this game, obtained legally. I'll keep what the room makes private.</span></label>
     <p class="muted small">A GameCube, Wii or DS project comes with its whole source tree from the host, and is then built here with your copy and your compilers: the first time takes a few minutes.</p>
+    <label class="check"><input type="checkbox" id="jTrust"><span>I trust the host with this computer. Only needed for a GameCube, Wii or DS game the host started from scratch: its build setup comes from the host, and building it runs that here. (A public decomp's build comes from its own repository; changes the host makes to it wait until you look at them.)</span></label>
     <div class="row"><button class="primary" id="jGo" type="button">Join</button></div><pre class="joblog" id="jLog" hidden></pre>`);
   body.querySelector("#jGo").onclick = async () => {
     const file = $("jRom").files[0], path = $("jPath").value.trim();
@@ -1101,7 +1297,7 @@ function openJoin() {
     $("jLog").hidden = false;
     $("jGo").disabled = true;
     try {
-      let q = `link=${encodeURIComponent($("jLink").value.trim())}&name=${encodeURIComponent($("jName").value)}&confirmed=1`;
+      let q = `link=${encodeURIComponent($("jLink").value.trim())}&name=${encodeURIComponent($("jName").value)}&confirmed=1${$("jTrust").checked ? "&trust=1" : ""}`;
       q += path ? `&path=${encodeURIComponent(path)}` : `&filename=${encodeURIComponent(file.name)}`;
       // the file streams from disk as it's sent: a disc image is never read into the page whole
       const { job } = await api(`/api/collab/join?${q}`, { method: "POST", raw: path ? new Blob([]) : file });
@@ -1126,9 +1322,73 @@ async function installToolchain(id, proprietary) {
   } catch (e) { toast(esc(e.message), "err"); }
 }
 
+/* ------------------------------------------------------------------ open rooms (roomlist.py) */
+const rooms = { data: null, plat: "", q: "", mine: false };
+const KIND = { rom: "from the game itself", fork: "a public decomp's fork", scratch: "started from scratch" };
+
+async function showRooms(fresh = false) {
+  show("rooms");
+  if (!rooms.data || fresh) {
+    $("roomsGrid").innerHTML = `<p class="muted">Reading the list…</p>`;
+    try { rooms.data = await api(`/api/rooms${fresh ? "?fresh=1" : ""}`); } catch (e) { rooms.data = { rooms: [], error: e.message, repo: "" }; }
+  }
+  const repo = rooms.data.repo || "";
+  $("roomsRepo").textContent = repo;
+  $("roomsRepo").href = repo ? `https://github.com/${repo}` : "#";
+  renderRooms();
+}
+
+function renderRooms() {
+  const all = rooms.data?.rooms || [];
+  const counts = {};
+  for (const r of all) counts[r.platform] = (counts[r.platform] || 0) + 1;
+  const plats = PLAT_ORDER.filter((k) => counts[k]).concat(Object.keys(counts).filter((k) => !PLAT_ORDER.includes(k)));
+  $("roomsChips").hidden = $("roomsTools").hidden = !all.length;
+  $("roomsChips").innerHTML = [`<button class="chip ${rooms.plat ? "" : "on"}" data-plat="" type="button">All <span>${all.length}</span></button>`]
+    .concat(plats.map((k) => `<button class="chip ${rooms.plat === k ? "on" : ""}" data-plat="${esc(k)}" type="button">${esc(PLAT_SHORT[k] || k.toUpperCase())} <span>${counts[k]}</span></button>`)).join("");
+  $("roomsChips").querySelectorAll(".chip").forEach((b) => { b.onclick = () => { rooms.plat = b.dataset.plat; renderRooms(); }; });
+  const q = rooms.q.toLowerCase();
+  const rows = all.filter((r) => (!rooms.plat || r.platform === rooms.plat) && (!rooms.mine || r.have)
+    && (!q || `${r.code} ${r.note} ${r.title || ""}`.toLowerCase().includes(q)))
+    .sort((a, b) => (!!b.have - !!a.have) || (b.seen - a.seen));
+  const err = rooms.data?.error;
+  $("roomsNote").textContent = err ? err : all.length
+    ? `${rows.length} of ${all.length} rooms. Each was checked by the list on GitHub in the last hours; its host may still be away when you look.`
+    : "";
+  $("roomsGrid").innerHTML = rows.map((r) => {
+    const pct = r.functions ? Math.min(100, (100 * r.matched) / r.functions) : 0;
+    const badge = r.hosted ? `<span class="badge matched">yours</span>` : r.joined ? `<span class="badge matched">joined</span>`
+      : r.have ? `<span class="badge matched">you have it</span>` : "";
+    return `<button class="cat-card" type="button" data-key="${esc(r.key)}">
+      <div class="cc-top"><span class="plat">${esc(PLAT_SHORT[r.platform] || r.platform.toUpperCase())}</span>${badge}${r.approve ? `<span class="badge">host lets people in</span>` : ""}${r.kind === "scratch" ? `<span class="badge">trust the host</span>` : ""}</div>
+      <h4>${esc(r.title || r.code || "a game")}</h4>
+      <p class="meta">${esc(r.code || "no product code")} · ${esc(KIND[r.kind] || r.kind)}${r.repo ? " · " + esc(r.repo.replace(/^https:\/\/(www\.)?github\.com\//, "")) : ""}</p>
+      <div class="meter"><i data-w="${pct}"></i></div>
+      <p class="meta"><b>${r.matched.toLocaleString()}</b> / ${r.functions.toLocaleString()} functions · ${r.members} member${r.members === 1 ? "" : "s"}${r.limit ? ` (at most ${r.limit})` : ""} · seen ${ago(new Date(r.seen * 1000).toISOString())}</p>
+      ${r.note ? `<p class="meta">${esc(r.note)}</p>` : ""}
+    </button>`;
+  }).join("") || (all.length ? `<p class="muted">Nothing matches.</p>` : err ? "" : `<p class="muted">No rooms are listed yet. A host lists a public room from its Team tab.</p>`);
+  requestAnimationFrame(() => setWidths($("roomsGrid")));
+  $("roomsGrid").querySelectorAll(".cat-card").forEach((b) => {
+    b.onclick = async () => {
+      const r = all.find((x) => x.key === b.dataset.key);
+      if (r.hosted || r.joined) { location.hash = `#/p/${r.hosted || r.joined}`; return; }
+      b.disabled = true;
+      try {
+        const { link } = await api("/api/rooms/link", { method: "POST", body: { key: r.key } });
+        openJoin(link, `${r.have ? `You have this game here (<b>${esc(r.title)}</b>): pick that copy.` : `You need your own copy of <b>${esc(r.code || "its game")}</b>, exactly the host's version.`}${r.kind === "scratch" ? " Its build setup comes from the host: tick “I trust the host” only if you do." : ""}`);
+      } catch (e) { toast(esc(e.message), "err"); }
+      b.disabled = false;
+    };
+  });
+}
+$("roomsSearch").addEventListener("input", () => { rooms.q = $("roomsSearch").value; renderRooms(); });
+$("roomsMine").addEventListener("change", () => { rooms.mine = $("roomsMine").checked; renderRooms(); });
+$("roomsRefresh").onclick = () => showRooms(true);
+
 /* ------------------------------------------------------------------ public decomps */
-const PLAT_ORDER = ["gc", "wii", "ps", "ps2", "n64", "gba", "gb", "gbc", "nds", "switch", "win32", "xbox360", "3ds", "xbox", "psp"];
-const PLAT_SHORT = { gc: "GameCube", wii: "Wii", ps: "PS1", psx: "PS1", ps2: "PS2", n64: "N64", gba: "GBA", gb: "Game Boy", gbc: "Game Boy Color", sms: "Master System", gg: "Game Gear", nds: "DS", switch: "Switch", win32: "PC", xbox360: "Xbox 360", "3ds": "3DS", xbox: "Xbox", psp: "PSP" };
+const PLAT_ORDER = ["gc", "wii", "ps", "ps2", "n64", "gba", "nds", "switch", "win32", "xbox360", "3ds", "xbox", "psp"];
+const PLAT_SHORT = { gc: "GameCube", wii: "Wii", ps: "PS1", psx: "PS1", ps2: "PS2", n64: "N64", gba: "GBA", gb: "GB", gbc: "GBC", nes: "NES", nds: "DS", switch: "Switch", win32: "PC", xbox360: "Xbox 360", "3ds": "3DS", xbox: "Xbox", psp: "PSP" };
 const cat = { list: null, downloaded: null, plat: "", q: "", done: false };
 
 /* The list decomp.dev had, as this install downloaded it before the directory was retired (none on a new one). */
@@ -1194,14 +1454,13 @@ $("repoFork").onclick = () => {
 };
 
 /* What the project's own files say about AI, word for word, before anything is cloned. */
-function policyHtml(pol) {
-  if (pol.error) return `<div class="notice"><span>Couldn't read what the project says about AI (${esc(pol.error)}). Look at its README and contribution rules yourself before you fork it.</span></div>`;
-  const quotes = pol.lines.map((l) => `<blockquote class="policy-line">“${esc(l.text)}” <span class="muted small">${esc(l.file)}</span></blockquote>`).join("");
-  if (pol.lean === "no") return `<div class="notice bad"><span><b>This project says it doesn't want AI-made code.</b> Respect that: keep this fork for yourself, to study the game, and send it nothing your agents wrote.</span></div>${quotes}
-    <label class="check"><input type="checkbox" id="forkOk"><span>I'll keep this fork to myself and won't send AI-made code to this project.</span></label>`;
-  if (pol.lean === "silent") return `<p class="muted small">Its README and contribution files (${esc(pol.files.join(", ") || "none")}) say nothing about AI. Ask the project's team before you send it anything your agents wrote.</p>`;
-  if (pol.lean === "rules") return `<p class="small"><b>This project allows AI, with rules of its own.</b> Follow them in anything you send it:</p>${quotes}`;
-  return `<p class="small"><b>What the project says about AI:</b></p>${quotes}`;
+function policyHtml(pol, acknowledgement = true) {
+  const warning = pol.error ? '<div class="notice"><span>Policy review is incomplete: ' + esc(pol.error) + '. Read the contribution files directly.</span></div>' : "";
+  const quotes = warning + (pol.lines || []).map((l) => '<blockquote class="policy-line">“' + esc(l.text) + '” <span class="muted small">' + esc(l.file) + '</span></blockquote>').join("");
+  if (pol.lean === "no") return '<div class="notice bad"><span><b>This project states restrictions on AI-made code.</b> Read and follow the quoted rules before contributing.</span></div>' + quotes
+    + (acknowledgement ? '<label class="check"><input type="checkbox" id="forkOk"><span>I will follow these contribution rules.</span></label>' : "");
+  if (pol.lean === "silent") return warning || '<p class="muted small">No AI statements were found in the inspected files (' + esc((pol.files || []).join(", ") || "none") + '). Read the project contribution rules before sending work.</p>';
+  return '<p class="small"><b>What the project says about AI and contributions:</b></p>' + quotes;
 }
 
 function openForkDialog(p) {
@@ -1335,7 +1594,7 @@ function cssColor(name) {
   return rgb;
 }
 function readColors() {
-  colors = { open: cssColor("--open"), tried: cssColor("--tried"), work: cssColor("--work"), match: cssColor("--match"), hi: cssColor("--match-hi"), ink: cssColor("--ink"), stuck: cssColor("--miss") };
+  colors = { open: cssColor("--open"), tried: cssColor("--tried"), work: cssColor("--work"), match: cssColor("--match"), hi: cssColor("--match-hi"), ink: cssColor("--ink"), doc: cssColor("--doc"), stuck: cssColor("--miss") };
 }
 const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
 const rgb = (c, a = 1) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
@@ -1362,7 +1621,7 @@ function applyClaims(draw = true) {
   const working = new Map(S.claims.map((c) => [c.name, c.agent]));
   let changed = false;
   for (const f of S.map) {
-    const status = f.status === "matched" || f.status === "asm" ? f.status : working.has(f.name) ? "working" : "open";
+    const status = ["matched", "asm", "documented"].includes(f.status) ? f.status : working.has(f.name) ? "working" : "open";
     if (status !== f.status) { f.status = status; changed = true; }
     f.agent = working.get(f.name) || null;
   }
@@ -1383,7 +1642,8 @@ function applyAttempts(attempts) {
 
 function cellColor(f) {
   if (f.status === "matched") return [colors.match, 1];
-  if (f.status === "asm") return [colors.tried, 0.35];
+  if (f.status === "documented") return [colors.doc, 1];
+  if (f.status === "asm") return f.review ? [colors.work, 0.6] : [colors.tried, 0.35];
   if (f.ignored) return [colors.stuck, 1];
   if (f.best != null) return [mix(colors.tried, colors.hi, Math.pow(pctOf(f.best, f.insns) || 0, 3)), 1];
   return [colors.open, 1];
@@ -1492,17 +1752,27 @@ function reading(c) {
   return min >= 1 ? `reading · ${min} min` : "reading";
 }
 
+/* Live lists are redrawn on every poll (1-2 s): only when their HTML changed, so a click on a button or card that
+   the redraw would replace mid-press (Stop, Disconnect) isn't lost. True when it was redrawn. */
+function setHtml(box, html) {
+  if (box.__html === html) return false;
+  box.innerHTML = html;
+  box.__html = html;
+  return true;
+}
+
 function renderNow(claims) {
   const box = $("now");
   claims = claims.filter((c) => c.agent !== AUTO);
-  if (!claims.length) { box.innerHTML = ""; return; }
-  box.innerHTML = claims.map((c) => {
+  if (!claims.length) { setHtml(box, ""); return; }
+  const html = claims.map((c) => {
     const sc = S.scores.get(c.name) || [];
     const p = pctOf(c.best_score, c.n_insns);
     const [sym, unit] = c.name.split(/@(.*)/s);  // a fork's symbol@file: the symbol first, the file after it
     return `<div class="job" data-fn="${esc(c.name)}"><div class="job-top"><span class="job-name" title="${esc(c.name)}">${esc(sym)}${unit ? `<small>@${esc(unit)}</small>` : ""}</span><span class="job-who" title="${esc(c.agent)}">${esc(c.agent)}</span></div>
       ${spark(sc)}<div class="job-foot"><span>${c.n_insns} insns · ${c.attempts} tries</span><b>${p == null ? reading(c) : pctText(p)}</b></div></div>`;
   }).join("");
+  if (!setHtml(box, html)) return;
   box.querySelectorAll(".job").forEach((j) => { j.onclick = () => openFn(j.dataset.fn); });
 }
 
@@ -1514,26 +1784,41 @@ function renderSessions(sessions) {
   const board = new Map((S.stats?.agents || []).map((r) => [r.agent, r]));
   const running = sessions.filter((s) => ["starting", "working", "waiting"].includes(s.state));
   $("stopAll").hidden = running.length < 2;
-  box.innerHTML = sessions.map((s) => {
+  $("removeAll").hidden = sessions.length - running.length < 2;
+  const html = sessions.map((s) => {
     const claim = S.claims.find((c) => c.agent === s.agent);
     const dot = s.state === "error" ? "err" : s.state === "working" ? "on" : s.state === "stopped" ? "" : "work";
     const live = ["starting", "working", "waiting"].includes(s.state);
-    const b = board.get(s.agent);
-    const facts = [s.model ? esc(s.model) : "default model", s.runs ? `session ${s.runs}` : "", b && b.matched ? `<b class="ok">${b.matched} matched</b>` : "", b ? plural(b.compiles, "compile") : "",
+    const b = s.compiles != null ? s : board.get(s.agent);  // this session's own work (names are reused)
+    const quiet = live && s.last_output ? Math.floor((Date.now() / 1000 - s.last_output) / 60) : 0;  // the watchdog ends it at 15
+    const facts = [s.model ? esc(s.model) : "default model", s.runs ? `session ${s.runs}` : "", quiet >= 3 ? `<b class="warn-text">silent ${quiet} min</b>` : "", b && b.matched ? `<b class="ok">${b.matched} matched</b>` : "", b ? plural(b.compiles, "compile") : "",
       s.usd ? money(s.usd) : s.tokens ? `${(s.tokens / 1000).toFixed(0)}k tokens` : "", s.started_at ? `since ${clock(s.started_at).slice(0, 5)}` : ""].filter(Boolean);
-    return `<div class="session"><div class="session-top"><span class="dot ${dot}"></span><b>${esc(s.label)}</b>
+    return `<div class="session"><div class="session-top"><span class="dot ${dot}"></span><b>${esc(s.label)}</b>${s.only_starred ? `<span class="tag">only ★</span>` : ""}${s.pin ? `<span class="tag" title="${s.lean ? `the lean loop: ${esc(LEAN_NAME[s.lean] || s.lean)}` : "pinned to one function"}">on ${esc(s.pin)}${s.lean ? " · lean" : ""}</span>` : s.lean ? `<span class="tag" title="the lean loop: ${esc(LEAN_NAME[s.lean] || s.lean)}, function after function">lean</span>` : ""}${s.focus ? `<span class="tag">${esc((FOCUS.find((f) => f.id === s.focus) || {}).name || s.focus)}</span>` : ""}${s.track === "asm" ? `<span class="tag" title="documenting hand-written routines in assembly">assembly</span>` : ""}
         <span class="state ${s.state === "error" ? "err" : ""}">${esc(STATE_TEXT[s.state] || s.state)}</span>
         <button class="ghost" data-stop="${esc(s.id)}" data-remove="${live ? "" : "1"}" type="button">${live ? "Stop" : "Remove"}</button></div>
       <span class="facts-line">${facts.join(" · ")}</span>
+      ${s.tiered ? `<span class="facts-line">tiered · ${s.model ? `${esc(s.model)}${s.effort ? ` (${esc(s.effort)})` : ""}` : "picking a model"}${s.tier ? ` · ${esc(s.tier.replace("_", " "))}` : ""}</span>` : ""}
+      ${s.state === "waiting" && s.wait_until > Date.now() / 1000 ? `<span class="facts-line">waiting until ${esc(clock(s.wait_until).slice(0, 5))}: ${esc(s.wait_why)}</span>` : ""}
       ${s.state === "error" ? `<span class="state err">${esc(s.error)}</span>` : ""}
       ${claim ? `<span class="last">on ${fnLink(claim.name)}</span>` : ""}</div>`;
   }).join("");
   const own = new Set(sessions.map((s) => s.agent));
   const outside = [...new Set(S.claims.filter((c) => !own.has(c.agent) && c.agent !== AUTO).map((c) => c.agent))];
-  box.insertAdjacentHTML("beforeend", outside.map((a) => `<div class="session ext"><div class="session-top"><span class="dot on"></span><b>${esc(a)}</b><span class="tag">${a.startsWith("@") ? "in the room" : "connected agent"}</span></div>
-      <span class="last">on ${S.claims.filter((c) => c.agent === a).map((c) => fnLink(c.name)).join(", ")}</span></div>`).join(""));
-  box.querySelectorAll(".fn").forEach((x) => { x.onclick = () => openFn(x.dataset.fn); });
+  $("disconnectAll").hidden = outside.filter((a) => !a.startsWith("@")).length < 2;
   $("noSessions").hidden = sessions.length + outside.length > 0;
+  const ext = outside.map((a) => `<div class="session ext"><div class="session-top"><span class="dot on"></span><b>${esc(a)}</b><span class="tag">${a.startsWith("@") ? "in the room" : "connected agent"}</span>${a.startsWith("@") ? "" : `<button class="ghost" data-kick="${esc(a)}" type="button">Disconnect</button>`}</div>
+      <span class="last">on ${S.claims.filter((c) => c.agent === a).map((c) => fnLink(c.name)).join(", ")}</span></div>`).join("");
+  if (!setHtml(box, html + ext)) return;
+  box.querySelectorAll(".fn").forEach((x) => { x.onclick = () => openFn(x.dataset.fn); });
+  box.querySelectorAll("[data-kick]").forEach((b) => {
+    b.onclick = async () => {
+      const who = b.dataset.kick;
+      if (!confirm(`Disconnect ${who}? The functions it's working on go back to the others, and anything else it tries here is refused.`)) return;
+      const r = await api("/api/agents/disconnect", { method: "POST", body: { name: who } }).catch((e) => { toast(esc(e.message), "err"); });
+      if (r) toast(`Disconnected ${esc(who)}.`);
+      poll(false);
+    };
+  });
   box.querySelectorAll("[data-stop]").forEach((b) => {
     b.onclick = async () => {
       await api("/api/agents/stop", { method: "POST", body: { id: b.dataset.stop, remove: !!b.dataset.remove } }).catch((e) => toast(esc(e.message), "err"));
@@ -1547,8 +1832,43 @@ $("stopAll").onclick = async () => {
   poll(false);
 };
 
+$("disconnectAll").onclick = async () => {
+  if (!confirm("Disconnect every connected agent on this project? The functions they're working on go back to the others, and anything else they try here is refused. Your own helpers keep running.")) return;
+  const r = await api("/api/agents/disconnect", { method: "POST", body: { slug: S.slug } }).catch((e) => { toast(esc(e.message), "err"); });
+  if (r) toast(`Disconnected ${plural(r.disconnected.length, "agent")}.`);
+  poll(false);
+};
+$("removeAll").onclick = async () => {
+  await api("/api/agents/stop", { method: "POST", body: { slug: S.slug, remove: true } }).catch((e) => toast(esc(e.message), "err"));
+  poll(false);
+};
+
 /* ------------------------------------------------------------------ the launcher: agent, model, how many */
-const LZ = { kind: null, model: "", count: 1, per: null };
+/* The launcher's Focus menu: which functions new helpers take. Default leaves claiming as it always was. */
+const FOCUS = [{ id: "default", name: "Default" }, { id: "quick", name: "Quick Wins", note: "small functions only" },
+  { id: "close", name: "Close Calls", note: "functions already 90%+ matched" }];
+/* How an API helper or Codex works: its own agent loop (tools, a fresh session every few functions), or the lean loop
+   (lean.py): short prompts, three versions of the function per call, on to the next function when one stops gaining. */
+const LEAN_KINDS = ["api", "codex"];
+function leanSelect(a) {
+  if (!LEAN_KINDS.includes(a.id)) return "";
+  return `<label class="field"><span>How it works</span><select data-f="lean">
+    <option value="" ${LZ.lean ? "" : "selected"}>Agent loop: tools, a fresh session every few functions</option>
+    <option value="several" ${LZ.lean === "several" ? "selected" : ""}>Lean: short prompts, 3 versions per call</option></select></label>`;
+}
+/* On a Game Boy project, helpers can also document hand-written routines in assembly (the assembly track) */
+const ASM_FOCUS = { id: "asm", name: "Document assembly", note: "hand-written routines, in assembly" };
+function focusChoices() {
+  return ["gb", "gbc", "sms", "gg", "nes"].includes(S.ov?.platform) && S.ov?.kind !== "fork" ? [...FOCUS, ASM_FOCUS] : FOCUS;
+}
+function focusSelect() {
+  const choices = focusChoices();
+  // a game no compiler built (its bytes say so) starts on the assembly track
+  if (LZ.focus == null && S.ov?.built_with === null && choices.some((f) => f.id === "asm")) LZ.focus = "asm";
+  if (!choices.some((f) => f.id === LZ.focus)) LZ.focus = "default";
+  return `<label class="field"><span>Focus</span><select data-f="focus">${choices.map((f) => `<option value="${f.id}" ${f.id === (LZ.focus || "default") ? "selected" : ""}>${esc(f.name)}${f.note ? ` — ${esc(f.note)}` : ""}</option>`).join("")}</select></label>`;
+}
+const LZ = { kind: null, model: "", effort: "", count: 1, per: null };
 function launcherInit() {
   if (LZ.kind || !S.st) return;
   const l = S.st.settings.launcher || {};
@@ -1556,7 +1876,9 @@ function launcherInit() {
   const known = S.st.agents.find((a) => a.id === l.kind && (a.installed || a.id === "api"));
   LZ.kind = known ? known.id : (ready[0] ? ready[0].id : "api");
   LZ.model = known ? (l.model || "") : "";
+  LZ.effort = known ? (l.effort || "") : "";
   LZ.count = l.count || 1;
+  LZ.lean = l.lean || "";
   const eps = S.st.settings.endpoints || [];
   LZ.eps = (l.endpoints || []).filter((id) => eps.some((e) => e.id === id));
   if (!LZ.eps.length && eps.length) LZ.eps = [eps[0].id];
@@ -1567,6 +1889,16 @@ function modelOptions(a) {
   for (const m of a.models || []) opts.push(m);
   for (const r of recent) if (!opts.some((o) => o.id === r)) opts.push({ id: r, name: r, note: "used before" });
   return opts;
+}
+/* Codex (and Claude Code, in Work on this): the reasoning efforts the chosen model supports (its default model's when
+   none is chosen; every model's when the name was typed in), with what "Default" means: the user's own setting, else
+   the model's. */
+function effortOptions(a, model = LZ.model) {
+  const models = a.models || [];
+  const m = models.find((x) => x.id === (model || a.default_model)) || (model ? null : models.find((x) => (x.efforts || []).length));
+  const efforts = m ? m.efforts || [] : [...new Set(models.flatMap((x) => x.efforts || []))];
+  const base = a.default_effort || (m && m.effort) || "";
+  return [{ id: "", name: base ? `Default · ${base}` : "Default" }, ...efforts.map((e) => ({ id: e, name: e }))];
 }
 function modelName(a, model) {
   if (!model) return "";
@@ -1587,9 +1919,14 @@ async function startAgents(a, model, count, btn, extra = {}) {
   try {
     const options = { ...extra };
     if (model && a.id !== "api") options.model = model;
+    if (a.id === "codex" && LZ.effort) options.effort = LZ.effort;
     if (LZ.per) options.per_session = LZ.per;
+    if (LZ.starred && (S.ov?.priority || []).length) options.only_starred = true;
+    if (LZ.focus === "asm") options.track = "asm";
+    else if (LZ.focus && LZ.focus !== "default") options.focus = LZ.focus;
+    if (LZ.lean && LEAN_KINDS.includes(a.id)) Object.assign(options, { lean: LZ.lean, variants: 3 });
     await api("/api/agents/start", { method: "POST", body: { kind: a.id, slug: S.slug, count, options } });
-    S.st.settings.launcher = { kind: a.id, model: model || "", count };
+    S.st.settings.launcher = { kind: a.id, model: model || "", count, lean: LZ.lean || "", ...(a.id === "codex" && LZ.effort ? { effort: LZ.effort } : {}) };
     if (model && a.id !== "api") {
       const rec = (S.st.settings.recent_models ||= {});
       rec[a.id] = [model, ...(rec[a.id] || []).filter((m) => m !== model)].slice(0, 8);
@@ -1629,27 +1966,43 @@ function renderLauncher(box, compact = false) {
     body = `<label class="field"><span>Model</span><select data-f="model">${opts.map((o) => `<option value="${esc(o.id)}" ${known && o.id === LZ.model ? "selected" : ""}>${esc(o.name)}${o.note ? ` — ${esc(o.note)}` : ""}</option>`).join("")}
         <option value="__other" ${known ? "" : "selected"}>Another model…</option></select></label>
       <input data-f="custom" class="mono lz-custom" placeholder="model name, as ${esc(a.name)} calls it" value="${known ? "" : esc(LZ.model)}" ${known ? "hidden" : ""}>`;
+    if (a.id === "codex") {
+      const efforts = effortOptions(a);
+      if (!efforts.some((o) => o.id === LZ.effort)) LZ.effort = "";
+      body += `<label class="field"><span>Effort</span><select data-f="effort">${efforts.map((o) => `<option value="${esc(o.id)}" ${o.id === LZ.effort ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</select></label>`;
+    }
   }
   const ready = a.installed;
   box.innerHTML = `<div class="lz-kinds">${kinds}</div>
     <div class="lz-body">${body}
       ${ready ? `<div class="lz-row">
         <div class="field"><span>How many</span><span class="stepper"><button type="button" data-step="-1">−</button><output>${LZ.count}</output><button type="button" data-step="1">+</button></span></div>
+        ${focusSelect()}
+        ${leanSelect(a)}
         ${compact ? "" : `<label class="field"><span>Functions per session (CLI agents)</span><input data-f="per" type="number" min="1" max="20" value="${LZ.per || S.st.settings.per_session || 2}"></label>`}
         <span class="grow"></span>
         <button class="primary" data-act="start" type="button">${esc(launchLabel(a, LZ.model, LZ.count))}</button></div>
+      <label class="check"><input type="checkbox" data-f="starred" ${LZ.starred && (S.ov?.priority || []).length ? "checked" : ""} ${(S.ov?.priority || []).length ? "" : "disabled"}><span><b>Only ★ Next in line</b> (${plural((S.ov?.priority || []).length, "function")} marked): the helper works on those and stops when they're done</span></label>
         <p class="muted small">${a.id === "api" ? "A built-in agent loop drives the model through the decomp tools." : esc(a.signin)} Each agent takes a different function; a fresh session every few functions keeps its context small.</p>` : ""}
     </div>`;
   wireCopies(box);
   const rerender = () => { renderLauncher(box, compact); if (box !== $("launcher") && S.tab === "agents") renderLauncher($("launcher")); };
-  box.querySelectorAll(".lz-kind").forEach((b) => { b.onclick = () => { LZ.kind = b.dataset.k; LZ.model = (S.st.settings.launcher || {}).kind === LZ.kind ? S.st.settings.launcher.model || "" : ""; rerender(); }; });
+  box.querySelectorAll(".lz-kind").forEach((b) => { b.onclick = () => { LZ.kind = b.dataset.k; const saved = (S.st.settings.launcher || {}).kind === LZ.kind ? S.st.settings.launcher : {}; LZ.model = saved.model || ""; LZ.effort = saved.effort || ""; rerender(); }; });
   const sel = box.querySelector('select[data-f="model"]'), custom = box.querySelector('[data-f="custom"]');
   const label = () => { const btn = box.querySelector('[data-act="start"]'); if (btn) btn.textContent = launchLabel(a, LZ.model, LZ.count); };
-  if (sel) sel.onchange = () => { if (sel.value === "__other") { custom.hidden = false; custom.focus(); LZ.model = custom.value.trim(); } else { custom.hidden = true; LZ.model = sel.value; } label(); };
+  if (sel) sel.onchange = () => { if (sel.value === "__other") { custom.hidden = false; custom.focus(); LZ.model = custom.value.trim(); } else { custom.hidden = true; LZ.model = sel.value; } label(); if (a.id === "codex") rerender(); };
   if (custom) custom.oninput = () => { LZ.model = custom.value.trim(); label(); };
+  const effort = box.querySelector('select[data-f="effort"]');
+  if (effort) effort.onchange = () => { LZ.effort = effort.value; };
   box.querySelectorAll("[data-step]").forEach((b) => { b.onclick = () => { LZ.count = Math.max(1, Math.min(8, LZ.count + Number(b.dataset.step))); box.querySelector(".stepper output").textContent = LZ.count; label(); }; });
   const per = box.querySelector('[data-f="per"]');
   if (per) per.onchange = () => { LZ.per = Math.max(1, Math.min(20, Number(per.value) || 4)); };
+  const starred = box.querySelector('[data-f="starred"]');
+  if (starred) starred.onchange = () => { LZ.starred = starred.checked; };
+  const focus = box.querySelector('[data-f="focus"]');
+  if (focus) focus.onchange = () => { LZ.focus = focus.value; };
+  const leanBox = box.querySelector('[data-f="lean"]');
+  if (leanBox) leanBox.onchange = () => { LZ.lean = leanBox.value; };
   wireEndpointFields(box);
   box.querySelectorAll("[data-ep]").forEach((c) => { c.onchange = () => { LZ.eps = [...box.querySelectorAll("[data-ep]:checked")].map((x) => x.dataset.ep); label(); }; });
   const addEp = box.querySelector('[data-act="add-ep"]'), pickEp = box.querySelector('[data-act="pick-ep"]');
@@ -1740,10 +2093,15 @@ function eventHtml(ev) {
     case "context": return `${who} updated ${ev.agent ? "shared code" : "context"}: ${esc(d)}`;
     case "rename": return `${who} renamed ${esc(d)}`;
     case "split": return `${who} split ${esc(d)}`;
+    case "merge": return `${who} joined ${esc(d)}`;
+    case "review": return `${who} set ${esc(d)} aside for a person to review`;
+    case "documented": return `<span class="ok">✓</span> ${who} documented ${fnLink(d)} in assembly`;
+    case "reviewed": return `you looked over ${esc(d)}`;
+    case "correction": return `${who} corrected the split: ${esc(d)}`;
     case "files": return `${who ? who + " " : ""}gave code without a source file one: ${esc(d)}`;
     case "import": return `ROM analysed: ${esc(d)}`;
     case "compiler": return `compiler set to ${esc(d)}`;
-    case "collab": return esc(d);
+    case "collab": case "reopen": return esc(d);
     default: return `${who} ${esc(ev.kind)} ${esc(d)}`;
   }
 }
@@ -1884,10 +2242,10 @@ function fnBadge(d = S.fnDetail) {
   const pm = S.ov && S.ov.permuter;
   const permuting = working && working.agent === "permuter" && pm && pm.current === d.name;
   const st = $("fnStatus");
-  st.className = "badge " + (d.status === "matched" ? "matched" : working ? "working" : "");
-  st.textContent = d.status === "matched" ? "matched" : permuting
-    ? `permuter: ${pm.compiled} compiled, ${pm.failed} didn't${pm.lowest != null ? `, closest ${pctText(pctOf(pm.lowest, d.insns))}` : ""}`
-    : working ? `${working.agent} working` : d.ignored ? "ignored: stuck" : d.best != null ? `best ${pctText(pctOf(d.best, d.insns))}` : "not started";
+  st.className = "badge " + (d.status === "matched" ? "matched" : d.status === "documented" ? "documented" : working ? "working" : "");
+  st.textContent = d.status === "matched" ? "matched" : d.status === "documented" ? (d.sample ? "documented · look it over" : "documented")
+    : d.status === "asm" ? (d.review ? "needs review" : d.track ? "to document" : "set aside") : working ? `${working.agent} working` : d.ignored ? "ignored: stuck" : d.best != null ? `best ${pctText(pctOf(d.best, d.insns))}` : "not started";
+  st.title = d.status === "asm" ? (d.why || "") : d.status === "documented" ? "hand-written: documented in assembly that rebuilds it byte for byte" : "";
 }
 
 function showFnTab(tab) {
@@ -1931,6 +2289,19 @@ async function refreshFn(first) {
         refreshFn(false);
       } catch (e) { toast(esc(e.message), "err"); }
     };
+    $("fnWork").hidden = S.ov.kind === "fork" || d.status !== "open" || (S.ov.room || {}).role === "guest";
+    $("fnWork").onclick = () => openPinHelper(d.name);
+    // a set-aside function back to agents: a rule was wrong about it, or a review found it worth doing
+    $("fnGiveBack").hidden = d.status !== "asm" || (S.ov.room || {}).role === "guest";
+    $("fnGiveBack").title = `${d.review ? "Set aside for review" : "Set aside"}${d.why ? `: ${d.why}` : ""}. Give it back to agents: the set-aside rules leave it alone after.`;
+    $("fnGiveBack").onclick = async () => {
+      try {
+        await api("/api/give_back", { method: "POST", body: { slug: S.slug, function: d.name } });
+        toast(`<code>${esc(d.name)}</code>&nbsp;is back with the agents.`, "match");
+        await refreshFn(false);
+        poll(false);
+      } catch (e) { toast(esc(e.message), "err"); }
+    };
     $("noteAdd").onclick = async () => {
       const text = $("noteText").value.trim();
       if (!text) return;
@@ -1941,9 +2312,27 @@ async function refreshFn(first) {
         refreshFn(false);
       } catch (e) { toast(esc(e.message), "err"); }
     };
+    // a documented routine picked for review: a person says it's right, or sends it back with what's wrong
+    const guest = (S.ov.room || {}).role === "guest";
+    $("fnLooksRight").hidden = $("fnSendBack").hidden = !(d.status === "documented" && d.sample) || guest;
+    const verdict = async (ok, note = "") => {
+      try {
+        await api("/api/documented/review", { method: "POST", body: { slug: S.slug, function: d.name, ok, note } });
+        toast(ok ? `<code>${esc(d.name)}</code>&nbsp;stays documented.` : `<code>${esc(d.name)}</code>&nbsp;goes back to be documented again.`, ok ? "match" : "");
+        await refreshFn(false);
+        poll(false);
+      } catch (e) { toast(esc(e.message), "err"); }
+    };
+    $("fnLooksRight").onclick = () => verdict(true);
+    $("fnSendBack").onclick = () => {
+      const t = $("noteText").value.trim();
+      if (t.length < 10) { $("noteText").focus(); return toast("Say what's wrong in the note box first (it goes to the next agent), then Send back.", "err"); }
+      $("noteText").value = "";
+      verdict(false, t);
+    };
     $("fnAsm").innerHTML = highlightAsm(d.asm);
-    const kinds = { matched: "Matching C", best: "Best attempt so far", latest: S.ov.kind === "fork" ? "In the source now" : "Latest attempt", draft: "Machine draft (m2c)" };
-    $("fnSrcKind").textContent = kinds[d.source_kind] || "No C yet";
+    const kinds = { matched: "Matching C", documented: "Documented assembly", best: d.track ? "Best attempt so far (assembly)" : "Best attempt so far", latest: S.ov.kind === "fork" ? "In the source now" : "Latest attempt", draft: "Machine draft (m2c)", asm_draft: "Draft that rebuilds it: name it, comment it, then Try" };
+    $("fnSrcKind").textContent = kinds[d.source_kind] || (d.track ? `Not documented yet: write it in ${["sms", "gg"].includes(S.ov.platform) ? "WLA-DX" : S.ov.platform === "nes" ? "ca65" : "RGBDS"} assembly` : "No C yet");
     if (!S.editDirty || first) setEditor(d.source || "", d);
     $("copySrc").onclick = () => navigator.clipboard.writeText($("fnEdit").value).then(() => toast("Copied."));
     renderFnChart(d);
@@ -1954,7 +2343,7 @@ async function refreshFn(first) {
     $("fnXref").innerHTML = xr.join("");
     $("fnXref").querySelectorAll(".fn").forEach((x) => { x.onclick = () => openFn(x.dataset.fn.split("+")[0]); });
     $("fnNotes").innerHTML = d.notes.length ? `<p class="col-title">Notes from agents</p>` + d.notes.map((n) => `<div class="note"><small>${esc(n.agent)} · ${clock(n.created_at)}</small>${esc(n.text)}</div>`).join("") : "";
-    const tab = S.ftab || (d.status === "matched" || !d.scores.length ? "code" : "diff");
+    const tab = S.ftab || (d.status === "matched" || d.status === "documented" || !d.scores.length ? "code" : "diff");
     showFnTab(tab);
   } catch (e) {
     if (first) toast(esc(e.message), "err");
@@ -1970,7 +2359,7 @@ function setEditor(source, d) {
 }
 function paintEditor() {
   const ta = $("fnEdit");
-  $("fnSrc").innerHTML = highlightC(ta.value) + "\n";
+  $("fnSrc").innerHTML = (S.fnDetail && S.fnDetail.track ? highlightAsm(ta.value) : highlightC(ta.value)) + "\n";
   $("fnSrc").scrollTop = ta.scrollTop; $("fnSrc").scrollLeft = ta.scrollLeft;
 }
 $("fnEdit").addEventListener("input", () => { S.editDirty = true; paintEditor(); });
@@ -2073,6 +2462,12 @@ function insnHtml(text, other, cls) {
 function renderDiff(d) {
   const sum = $("diffSum"), box = $("diff"), probs = $("diffProblems");
   probs.innerHTML = "";
+  if (d.asm) {  // the assembly track: what the judge says of the text (the six checks)
+    const a = d.asm, label = { documented: "Documented assembly", best: "Best attempt", latest: "Latest attempt" }[d.kind] || "Attempt";
+    sum.innerHTML = `<b>${label}</b> · ${a.ok ? `<span class="ok">accepted: byte-identical, every check passed</span>` : `${a.same} of ${a.size} bytes the same${a.same === a.size ? `, ${plural(a.problems.length, "check")} still failing` : ""}`}`;
+    box.innerHTML = a.problems.length ? `<ul class="asm-checks">${a.problems.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : "";
+    return;
+  }
   if (!d.rows) {
     sum.innerHTML = d.error ? `<span class="bad">The ${d.kind === "best" ? "best" : "latest"} attempt didn't compile.</span>` : "No attempt yet. The diff appears after the first compile.";
     box.innerHTML = d.error ? `<pre class="code errlog">${esc(d.error)}</pre>` : "";
@@ -2134,18 +2529,29 @@ $("fnPrev").onclick = () => stepFn(-1);
 $("fnNext").onclick = () => stepFn(1);
 
 /* ------------------------------------------------------------------ function list */
-const L = { q: "", filter: "all", sort: "i", dir: 1, limit: 200, rows: [] };
-const FILTERS = [["all", "All"], ["open", "To do"], ["working", "Working"], ["tried", "Tried"], ["matched", "Matched"]];
-const fnState = (f) => (f.status === "matched" ? "matched" : f.status === "asm" ? "asm" : f.status === "working" ? "working" : f.best != null ? "tried" : "open");
-const STATE_RANK = { working: 0, tried: 1, open: 2, matched: 3, asm: 4 };
+const L = { q: "", filter: "all", sort: "i", dir: 1, limit: 200, rows: [], hideAsm: true };
+try { L.hideAsm = localStorage.getItem("fnHideAsm") !== "0"; } catch { /* no storage: the default */ }
+const FILTERS = [["all", "All"], ["open", "To do"], ["working", "Working"], ["tried", "Tried"], ["matched", "Matched"], ["review", "Needs review"],
+  ["document", "To document"], ["documented", "Documented"], ["lookover", "Look over"]];
+// "review": set aside by an agent for a person to look at (flag_for_review), shown even when assembly is hidden.
+// The assembly track (Game Boy): "document" is a hand-written routine still to document, "lookover" a documented one
+// picked for a person to look over.
+const fnState = (f) => (f.status === "matched" ? "matched" : f.status === "documented" ? "documented" : f.status === "asm" ? (f.review ? "review" : "asm") : f.status === "working" ? "working" : f.best != null ? "tried" : "open");
+const STATE_RANK = { working: 0, tried: 1, open: 2, review: 3, documented: 4, matched: 4, asm: 5 };
+const inFilter = (f, k) => (k === "document" ? fnState(f) === "asm" && f.track : k === "lookover" ? f.status === "documented" && f.sample : fnState(f) === k);
 
 function renderList() {
   if (!S.map.length || S.tab !== "functions") return;
-  const counts = { all: S.map.length, open: 0, working: 0, tried: 0, matched: 0, asm: 0 };
-  for (const f of S.map) counts[fnState(f)]++;
-  $("fnFilter").innerHTML = FILTERS.map(([k, label]) => `<button type="button" role="radio" aria-checked="${L.filter === k}" class="${L.filter === k ? "on" : ""}" data-filter="${k}">${label}<span>${counts[k].toLocaleString()}</span></button>`).join("");
+  const counts = { all: S.map.length, open: 0, working: 0, tried: 0, matched: 0, asm: 0, review: 0, documented: 0, document: 0, lookover: 0 };
+  for (const f of S.map) { counts[fnState(f)]++; if (inFilter(f, "document")) counts.document++; if (inFilter(f, "lookover")) counts.lookover++; }
+  if (L.hideAsm) counts.all -= counts.asm;
+  $("fnHideAsm").checked = L.hideAsm;
+  $("fnHideAsmN").textContent = counts.asm ? ` (${counts.asm.toLocaleString()})` : "";
+  $("fnHideAsmBox").hidden = !counts.asm;
+  if (["review", "document", "documented", "lookover"].includes(L.filter) && !counts[L.filter]) L.filter = "all";
+  $("fnFilter").innerHTML = FILTERS.filter(([k]) => !["review", "document", "documented", "lookover"].includes(k) || counts[k]).map(([k, label]) => `<button type="button" role="radio" aria-checked="${L.filter === k}" class="${L.filter === k ? "on" : ""}" data-filter="${k}">${label}<span>${counts[k].toLocaleString()}</span></button>`).join("");
   const q = L.q.trim().toLowerCase();
-  let rows = S.map.filter((f) => (L.filter === "all" || fnState(f) === L.filter)
+  let rows = S.map.filter((f) => (L.filter === "all" ? !(L.hideAsm && fnState(f) === "asm") : inFilter(f, L.filter))
     && (!q || f.name.toLowerCase().includes(q) || hex8(f.vram).toLowerCase().includes(q) || (f.unit || "").toLowerCase().includes(q)));
   const key = {
     i: (f) => f.i, name: (f) => f.name.toLowerCase(), insns: (f) => f.insns, attempts: (f) => f.attempts || 0,
@@ -2156,12 +2562,16 @@ function renderList() {
   const fork = S.ov && S.ov.kind === "fork";
   $("fnRows").innerHTML = rows.slice(0, L.limit).map((f) => {
     const st = fnState(f), p = pctOf(f.best, f.insns);
-    const best = st === "matched" ? `<span class="ok">100%</span>` : p == null ? `<span class="dim">–</span>` : pctText(p);
-    const status = st === "matched" ? `<span class="st matched" title="${esc(f.matched_by ? "by " + f.matched_by : "")}">matched</span>` : st === "asm" ? `<span class="st" title="hand-written assembly: no C compiles to it">assembly</span>` : st === "working" ? `<span class="st working">${esc(f.agent || "working")}</span>`
+    const best = st === "matched" || st === "documented" ? `<span class="ok">100%</span>` : p == null ? `<span class="dim">–</span>` : pctText(p);
+    const status = st === "matched" ? `<span class="st matched" title="${esc(f.matched_by ? "by " + f.matched_by : "")}">matched</span>` : st === "documented" ? `<span class="st documented" title="${esc(f.matched_by ? "by " + f.matched_by : "")}">documented${f.sample ? " · look over" : ""}</span>` : st === "review" ? `<span class="st review" title="${esc((f.review_by ? f.review_by + ": " : "") + (f.why || ""))}">needs review</span>` : st === "asm" ? `<span class="st" title="${esc(f.why || "hand-written assembly: no C compiles to it")}">${/padding|data|its end isn't known/.test(f.why || "") ? "not code" : f.track ? "to document" : "assembly"}</span>` : st === "working" ? `<span class="st working">${esc(f.agent || "working")}</span>`
       : st === "tried" ? `<span class="st tried">tried</span>` : `<span class="st">to do</span>`;
+    const pinned = (S.ov?.priority || []).includes(f.name);
+    // ☆/★ right in the row: pin many functions for the agents without opening each one (not for done or git-project ones)
+    const star = fork || st === "matched" || st === "documented" || st === "asm" || st === "review" ? (pinned ? `<span class="star" title="agents take it next">★</span>` : "")
+      : `<button type="button" class="star-btn ${pinned ? "on" : ""}" data-star="${esc(f.name)}" title="${pinned ? "Remove from Next in line" : "Agents take it next (★ Next in line)"}">${pinned ? "★" : "☆"}</button>`;
     const flag = f.ignored && st !== "matched" ? ` <span class="st" title="agents gave up on it (10 attempts without improvement): open it to unlock">🚫 ignored</span>` : "";
     return `<tr data-fn="${esc(f.name)}" class="${S.fn === f.name ? "sel" : ""}" tabindex="0"><td class="mono dim">${fork ? esc(f.unit || "") : hex8(f.vram)}</td>
-      <td class="mono name">${(S.ov && (S.ov.priority || []).includes(f.name)) ? `<span class="star" title="agents take it next">★</span>` : ""}${esc(f.name)}</td><td class="r mono">${f.insns.toLocaleString()}</td><td class="r mono">${best}</td>
+      <td class="mono name">${star}${esc(f.name)}</td><td class="r mono">${f.insns.toLocaleString()}</td><td class="r mono">${best}</td>
       <td class="r mono">${f.attempts || `<span class="dim">0</span>`}</td><td>${status}${flag}</td></tr>`;
   }).join("") || `<tr class="none"><td colspan="6">No function matches${q ? ` “${esc(L.q)}”` : ""}.</td></tr>`;
   $("fnShown").textContent = rows.length > L.limit ? `${L.limit.toLocaleString()} of ${rows.length.toLocaleString()} shown` : plural(rows.length, "function");
@@ -2174,7 +2584,17 @@ function renderList() {
 $("fnFilter").addEventListener("click", (e) => { const b = e.target.closest("[data-filter]"); if (b) { L.filter = b.dataset.filter; L.limit = 200; renderList(); } });
 $("fnSearch").addEventListener("input", () => { L.q = $("fnSearch").value; L.limit = 200; renderList(); });
 $("fnMore").onclick = () => { L.limit += 500; renderList(); };
-$("fnRows").addEventListener("click", (e) => { const tr = e.target.closest("tr[data-fn]"); if (tr) openFn(tr.dataset.fn); });
+$("fnHideAsm").addEventListener("change", (e) => {
+  L.hideAsm = e.target.checked;
+  try { localStorage.setItem("fnHideAsm", L.hideAsm ? "1" : "0"); } catch { /* remembered for this page only */ }
+  L.limit = 200;
+  renderList();
+});
+$("fnRows").addEventListener("click", (e) => {
+  const star = e.target.closest("[data-star]");
+  if (star) { e.stopPropagation(); togglePrio(star.dataset.star, !star.classList.contains("on")); return; }
+  const tr = e.target.closest("tr[data-fn]"); if (tr) openFn(tr.dataset.fn);
+});
 $("fnRows").addEventListener("keydown", (e) => { const tr = e.target.closest("tr[data-fn]"); if (tr && e.key === "Enter") openFn(tr.dataset.fn); });
 document.querySelectorAll(".fn-table th[data-sort]").forEach((th) => {
   th.onclick = () => {
@@ -2236,6 +2656,130 @@ function wireCopies(root) {
   root.querySelectorAll("[data-copy]").forEach((b) => { b.onclick = () => navigator.clipboard.writeText(b.dataset.copy).then(() => { b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1500); }); });
 }
 
+/* One helper on one function until it matches (the drawer's "Work on this"). An API helper runs the lean loop: a short
+   prompt per call (the target, the declarations it uses, the closest C, what still differs, what was tried) and C
+   only back, one version per call, several, or both in turn to compare them. Claude Code, Codex and the rest work in
+   their own loop, a fresh session per run. Either stops at a match, or when it stops getting closer. */
+const LEAN_NAME = { one: "one version per call", several: "several versions per call", both: "one and several per call in turn" };
+
+function openPinHelper(name) {
+  const eps = S.st.settings.endpoints || [];
+  const kinds = (S.st.agents || []).filter((a) => a.installed && a.id !== "api");
+  const last = S.st.settings.pin_helper || {};
+  const choices = [...eps.map((e) => ({ key: `ep:${e.id}`, label: `${e.name} · ${e.model}`, ep: e.id })),
+    ...kinds.map((a) => ({ key: `k:${a.id}`, label: a.name, kind: a.id, lean: a.id === "codex", agent: a }))];
+  if (!choices.length) {
+    dialog(`Work on ${name}`, `<p>Add an API endpoint or install an agent first: <a class="link" href="#/agents" data-close>Agents &amp; models</a>.</p>`);
+    return;
+  }
+  const pick = choices.find((c) => c.key === last.who) || choices[0];
+  const body = dialog(`Work on ${name} until it matches`, `<p class="muted">One helper on this function only. Each try starts from the closest version so far; it stops at a match, or when it stops getting closer, and leaves a note with what it tried.</p>
+    <label class="field"><span>Helper</span><select id="phWho">${choices.map((c) => `<option value="${esc(c.key)}" ${c === pick ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select></label>
+    <div id="phSetup" class="group">
+      <label class="field"><span>Model</span><select id="phModel"></select></label>
+      <input id="phCustom" class="lz-custom" hidden>
+      <label class="field" id="phEffortField"><span>Effort</span><select id="phEffort"></select></label>
+      <p class="muted small" id="phEffortNote">Two runs without getting closer and it tries one effort higher (up to high), back to this one after a gain.</p>
+    </div>
+    <div id="phLean" class="group">
+      <label class="field"><span>How to ask</span><select id="phMethod"></select></label>
+      <label class="field" id="phNField"><span>Versions per call</span><input id="phN" type="number" min="2" max="6" value="${esc(String(last.variants || 3))}"></label>
+      <label class="field" id="phEscField"><span>When stuck, switch to</span><select id="phEsc"><option value="">Stay on this model</option>${eps.map((e) => `<option value="${esc(e.id)}" ${e.id === last.escalate ? "selected" : ""}>${esc(e.name)} · ${esc(e.model)}</option>`).join("")}</select></label>
+      <p class="muted small">The lean loop: a short prompt per call (the target, the declarations it uses, the closest C, what still differs, what was tried) and C only back. Nothing carries over from call to call, so calls stay small. Each attempt records its method and tokens: the overview's <b>Which setup works best</b> compares them.</p>
+    </div>
+    <label class="field"><span>Stop after this many <span id="phUnit">calls</span> without getting closer</span><input id="phStall" type="number" min="2" max="50"></label>
+    <label class="check"><input type="checkbox" id="phPolish" ${last.polish === false ? "" : "checked"}><span><b>The permuter between tries</b>: free rewrites of the closest version (order, temporaries, casts), no tokens</span></label>
+    <div class="row"><button class="primary" id="phGo" type="button">Start</button></div>`);
+  const which = () => choices.find((c) => c.key === $("phWho").value);
+  const METHODS = { several: "Several versions per call (three by default: best in our tests)", one: "One version per call", both: "Test both: in turn, on this function" };
+  const lean = () => $("phMethod").value !== "agent";
+  /* Each agent's model and effort, as last started here, else as the launcher last started it. An API endpoint has its
+     own model (Agents & models). */
+  const launcher = S.st.settings.launcher || {};
+  const setups = {};
+  const setupOf = (kind) => (setups[kind] ||= { model: "", effort: "", ...((last.setups || {})[kind] ||
+    (launcher.kind === kind ? { model: launcher.model || "", effort: launcher.effort || "" } : {})) });
+  const efforts = () => {  // Codex's per model; Claude Code's --effort, unless the tier picks it
+    const c = which(), cur = setupOf(c.kind);
+    return (c.kind === "codex" || c.kind === "claude") && cur.model !== "tiered" ? effortOptions(c.agent, cur.model) : [];
+  };
+  const fillEffort = () => {
+    const c = which(), cur = setupOf(c.kind), opts = efforts();
+    if (!opts.some((o) => o.id === cur.effort)) cur.effort = "";
+    $("phEffort").innerHTML = opts.map((o) => `<option value="${esc(o.id)}" ${o.id === cur.effort ? "selected" : ""}>${esc(o.name)}</option>`).join("");
+    $("phEffortField").hidden = opts.length < 2;
+    note();
+  };
+  const fillSetup = () => {
+    const c = which();
+    $("phSetup").hidden = !c.agent;
+    if (!c.agent) return;
+    const cur = setupOf(c.kind), opts = modelOptions(c.agent), known = opts.some((o) => o.id === cur.model);
+    $("phModel").innerHTML = opts.map((o) => `<option value="${esc(o.id)}" ${known && o.id === cur.model ? "selected" : ""}>${esc(o.name)}${o.note ? ` — ${esc(o.note)}` : ""}</option>`).join("")
+      + `<option value="__other" ${known ? "" : "selected"}>Another model…</option>`;
+    $("phCustom").hidden = known;
+    $("phCustom").value = known ? "" : cur.model;
+    $("phCustom").placeholder = `model name, as ${c.agent.name} calls it`;
+    fillEffort();
+  };
+  const note = () => { $("phEffortNote").hidden = $("phEffortField").hidden || (which().lean && lean()); };  // the lean loop keeps it
+  const fill = () => {  // Codex can also work its own way (tools, a session per run); an API model only lean
+    const c = which(), keep = $("phMethod").value || last.lean || "several";
+    const opts = c.ep ? METHODS : { ...METHODS, agent: "Its own loop: tools, a fresh session per run" };
+    $("phMethod").innerHTML = Object.entries(opts).map(([k, v]) => `<option value="${k}" ${k === keep ? "selected" : ""}>${v}</option>`).join("");
+  };
+  const sync = () => {
+    const c = which(), on = !!(c.ep || c.lean);
+    $("phLean").hidden = !on;
+    $("phEscField").hidden = !c.ep;
+    $("phNField").hidden = $("phMethod").value === "one" || !lean();
+    const calls = on && lean();
+    $("phUnit").textContent = calls ? "calls" : "runs";
+    $("phStall").value = calls ? (last.stall_calls || 10) : (last.stall_runs || 4);
+    note();
+  };
+  $("phWho").onchange = () => { fill(); fillSetup(); sync(); };
+  $("phMethod").onchange = sync;
+  $("phModel").onchange = () => {
+    const cur = setupOf(which().kind), other = $("phModel").value === "__other";
+    $("phCustom").hidden = !other;
+    cur.model = other ? $("phCustom").value.trim() : $("phModel").value;
+    if (other) $("phCustom").focus();
+    fillEffort();
+  };
+  $("phCustom").oninput = () => { setupOf(which().kind).model = $("phCustom").value.trim(); };
+  $("phEffort").onchange = () => { setupOf(which().kind).effort = $("phEffort").value; };
+  fill();
+  fillSetup();
+  sync();
+  body.querySelector("#phGo").onclick = async () => {
+    const c = which(), go = $("phGo");
+    const options = { pin: name, stall: Number($("phStall").value) || 0, polish: $("phPolish").checked };
+    let kind = c.kind;
+    if (c.ep) {
+      kind = "api";
+      Object.assign(options, { endpoints: [c.ep], lean: $("phMethod").value, variants: Number($("phN").value) || 3 });
+      if ($("phEsc").value) options.escalate = $("phEsc").value;
+    } else {
+      const cur = setupOf(c.kind);
+      if (cur.model) options.model = cur.model;
+      if (cur.effort && !$("phEffortField").hidden) options.effort = cur.effort;
+      if (c.lean && lean()) Object.assign(options, { lean: $("phMethod").value, variants: Number($("phN").value) || 3 });
+    }
+    go.disabled = true;
+    try {
+      await api("/api/agents/start", { method: "POST", body: { kind, slug: S.slug, count: 1, options } });
+      S.st.settings.pin_helper = { who: c.key, lean: options.lean, variants: options.variants, escalate: options.escalate || "",
+        polish: options.polish, [options.lean ? "stall_calls" : "stall_runs"]: options.stall,
+        setups: { ...(last.setups || {}), ...(c.ep ? {} : { [kind]: { model: options.model || "", effort: options.effort || "" } }) } };
+      $("dialog").hidden = true;
+      const setup = [options.model && modelName(c.agent, options.model), options.effort && `${options.effort} effort`].filter(Boolean).join(", ");
+      toast(`A helper is on <code>${esc(name)}</code>${setup ? ` (${esc(setup)})` : ""}: watch it in Agents.`, "match");
+      poll(false);
+    } catch (e) { toast(esc(e.message), "err"); go.disabled = false; }
+  };
+}
+
 function dialog(title, html) {
   $("dialogTitle").textContent = title;
   $("dialogBody").innerHTML = html;
@@ -2245,7 +2789,7 @@ function dialog(title, html) {
   return $("dialogBody");
 }
 
-$("joinBtn").onclick = openJoin;
+$("joinBtn").onclick = () => openJoin();
 $("askBtn").onclick = openConnect;
 $("talkBtn").onclick = openConnect;
 $("connectBtn").onclick = openConnect;
@@ -2339,7 +2883,7 @@ function renderPrio() {
    function's machine draft through the judge; the permuter works on near misses meanwhile. */
 function renderAutopilot(ov) {
   const box = $("autopilot"), ap = ov.autopilot, tw = ov.twins, pm = ov.permuter;
-  const canRun = (ov.kind !== "fork" || ov.ready) && ov.functions - ov.matched > 0;
+  const canRun = (ov.kind !== "fork" || ov.ready) && progress(ov).total - ov.matched > 0;
   box.hidden = !ap && !canRun && !tw && !pm;
   if (box.hidden) return;
   const running = ap && ap.state === "running";
@@ -2347,9 +2891,9 @@ function renderAutopilot(ov) {
   box.classList.toggle("on", !!(running || twinsRunning));
   $("apBar").hidden = !running || ap.phase === "twins";
   const perm = pm && (pm.tried || pm.state === "running")
-    ? ` The permuter ${pm.state === "running" ? (pm.current
-      ? `is trying rewrites (now ${pm.current}: ${pm.compiled} compiled${pm.failed ? `, ${pm.failed} didn't` : ""}${pm.lowest != null ? `, closest ${pm.lowest}` : ""})`
-      : "is waiting for near misses") : "rewrote near misses"}: ${plural(pm.tried, "function")}, ${plural(pm.variants, "rewrite")} tried, ${pm.matched} matched.${pm.failed && pm.error ? ` Last compile error: ${pm.error}` : ""}` : "";
+    ? ` The permuter ${pm.state === "running" ? `is rewriting near misses${pm.current ? ` (now ${pm.current})` : ""}` : "rewrote near misses"}: ${plural(pm.tried, "function")}, ${pm.matched} matched.`
+      // a lane whose compiler won't take its rewrites shows here, instead of the permuter spinning in silence
+      + (pm.failed && pm.failed * 4 >= pm.variants ? ` ${pm.failed} of ${plural(pm.variants, "rewrite")} didn't compile${pm.last_error ? ` (last: ${pm.last_error})` : ""}.` : "") : "";
   const twinsDone = (ap && ap.twins) || (tw && tw.matched) || 0;
   if (running && ap.phase === "twins") {
     $("apTitle").textContent = "Autopilot: matching code the game has more than once (twins of matched functions)";
@@ -2393,6 +2937,7 @@ const cwName = (c) => (c.startsWith("DS/") ? `CodeWarrior for DS ${c.slice(3)}` 
 function renderSource(ov) {
   const ex = ov.export, fork = ov.kind === "fork";
   $("srcExport").hidden = fork || !ov.exportable;
+  $("srcDiscExport").hidden = fork || ov.platform !== "psx";
   $("srcWhen").textContent = !fork && ex ? `exported ${since(ex.t)}` : "";
   if (fork) {
     const rb = ov.rebuild;
@@ -2401,6 +2946,15 @@ function renderSource(ov) {
         + (rb ? `<p class="small ${rb.identical ? "ok" : "warn-text"}">${rb.identical ? "✓ The rebuilt game is your copy, byte for byte" + (/padding/.test(rb.detail) ? " (up to the padding at its end: your copy is trimmed)." : ".")
           : `The rebuilt game isn't your copy byte for byte yet: ${esc(rb.detail)}. Decompiling works anyway: every function is compared with your copy's own code.`}</p>` : "")
       : `This project <b>is</b> the source tree${ov.repo_url ? ` (a fork of <a class="link" href="${esc(ov.repo_url)}" target="_blank" rel="noopener">${esc(ov.repo_url.replace(/^https?:\/\//, ""))}</a>)` : ""}. Every match is committed to the <code>decomp-wtf</code> branch, ready to send upstream.`;
+    $("srcText").innerHTML += '<details><summary>Contribution rules (saved review)</summary>'
+      + (ov.contribution_policy ? policyHtml(ov.contribution_policy, false) : '<p>No saved review. Read the project contribution files before sending work.</p>')
+      + '<button class="ghost small-btn" id="refreshPolicy" type="button">Review current local rules</button></details>';
+    $("refreshPolicy").onclick = async () => {
+      try {
+        ov.contribution_policy = await api("/api/fork/policy", { method: "POST", body: { slug: S.slug } });
+        renderSource(ov);
+      } catch (e) { toast(esc(e.message), "err"); }
+    };
     $("srcState").innerHTML = `<div class="row"><button class="ghost small-btn" id="forkMeasure" type="button">Re-measure with objdiff</button>${rb ? `<button class="ghost small-btn" id="romCheck" type="button">Rebuild the game and compare</button>` : ""}</div>`;
     if (rb) $("romCheck").onclick = async () => {
       $("romCheck").disabled = true;
@@ -2425,15 +2979,38 @@ function renderSource(ov) {
     $("srcState").innerHTML = "";
     return;
   }
-  $("srcText").innerHTML = "decomp.wtf writes a complete decompilation project: the matched functions as C, everything else as assembly, a linker script and <code>build.py</code>. Then it builds it to prove it rebuilds your game <b>byte for byte</b>. It's the base for ports and mods; game code and data stay out of git, so the tree is safe to put in a repository.";
+  $("srcText").innerHTML = ov.platform === "nes"
+    ? "decomp.wtf writes a ca65/ld65 project: where each function is and its name, what its agents found out, the routines documented in assembly, and <code>build.py</code>, which disassembles your copy (each PRG bank at the address it's shown at, code as instructions, the rest as bytes, the header and graphics included from your copy) and rebuilds it with cc65, each documented routine in place of its bytes. Then it builds it to prove it rebuilds your game <b>byte for byte</b>. Nearly every NES game was written in assembly, so this is its source: the base for mods, translations and ports. The game's bytes stay out of git, but documented routines are its code written out: share the tree only if you have the right to."
+    : ["sms", "gg"].includes(ov.platform)
+    ? "decomp.wtf writes a WLA-DX project: where each function is and its name, what its agents found out, the routines documented in assembly, and <code>build.py</code>, which disassembles your copy (code as instructions, the rest as bytes) and rebuilds it with WLA-DX, each documented routine in place of its bytes. Then it builds it to prove it rebuilds your game <b>byte for byte</b>. Most Master System and Game Gear games were written in assembly, so this is their source: the base for mods, translations and ports. The game's bytes stay out of git, but documented routines are its code written out: share the tree only if you have the right to."
+    : ["gb", "gbc"].includes(ov.platform)
+    ? "decomp.wtf writes an RGBDS project: the game as assembly, with the project's names and what its agents found out as comments, and <code>build.py</code>, which disassembles your copy with mgbdis and rebuilds it, each routine documented in assembly in place of its bytes. Then it builds it to prove it rebuilds your game <b>byte for byte</b>. Most Game Boy games were written in assembly, so this is their source: the base for mods, translations and ports. Functions matched in C come along for reference. The game's bytes stay out of git, but documented routines are its code written out: share the tree only if you have the right to."
+    : "decomp.wtf writes a complete decompilation project: the matched functions as C, everything else as assembly, a linker script and <code>build.py</code>. Then it builds it to prove it rebuilds your game <b>byte for byte</b>. It's the base for ports and mods; game code and data stay out of git, so the tree is safe to put in a repository.";
   const stale = ex && ex.matched != null && ex.matched < ov.matched;
   $("srcState").innerHTML = !ex ? `<span class="muted small">Not exported yet.</span>`
     : `<div class="src-line ${ex.identical === false ? "bad" : "ok"}">${ex.identical === false ? "✕ the last rebuild differed" : "✓ rebuilds byte for byte"}</div>
-       <div class="src-line">${ex.matched != null ? `${ex.matched.toLocaleString()} of ${ex.functions.toLocaleString()} functions in C` : ""}${stale ? ` · <b>${ov.matched - ex.matched} new matches since</b>` : ""}</div>
+       <div class="src-line">${ex.matched != null ? `${ex.matched.toLocaleString()} of ${ex.functions.toLocaleString()} functions ${["gb", "gbc", "sms", "gg", "nes"].includes(ov.platform) ? "also matched " : ""}in C` : ""}${stale ? ` · <b>${ov.matched - ex.matched} new matches since</b>` : ""}</div>
+       ${ex.documented != null ? `<div class="src-line">${plural(ex.documented, "routine")} documented in assembly, in place of their bytes${ex.left_out ? ` · ${ex.left_out} left as mgbdis has them (they no longer pass with today's names: see the export's log)` : ""}${(ov.documented || 0) > ex.documented + (ex.left_out || 0) ? ` · <b>${ov.documented - ex.documented - (ex.left_out || 0)} documented since</b>` : ""}</div>` : ""}
        ${ex.path ? `<div class="src-line">${esc(ex.path)}</div>` : ""}`;
   $("srcExport").textContent = ex ? "Export again" : "Export project";
 }
 $("srcOpen").onclick = () => openFolder();
+$("srcDiscExport").onclick = () => {
+  const body = dialog("Build disc image", '<p>Use your original BIN, IMG, ISO or CUE assets. File sizes and LBAs stay fixed. Audio and untouched sectors are copied exactly.</p>'
+    + '<label class="field"><span>Original disc path</span><input id="discBase" placeholder="/path/to/original.cue"></label>'
+    + '<label class="field"><span>Edited flat build (optional)</span><input id="discImage" placeholder="/path/to/build.bin"></label>'
+    + '<p class="muted small">Leave the build blank to reproduce the imported bytes after checking matched C. An edited build must retain the project image size and mapped extents.</p>'
+    + '<button class="primary" id="discBuild" type="button">Build new copy</button><pre class="joblog" id="discLog"></pre><div id="discResult"></div>');
+  body.querySelector("#discBuild").onclick = async () => {
+    $("discBuild").disabled = true;
+    try {
+      const { job } = await api("/api/disc/export", { method: "POST", body: { slug: S.slug, original: $("discBase").value.trim(), image: $("discImage").value.trim() } });
+      const r = await followJob(job, $("discLog"));
+      $("discResult").textContent = (r.identical ? "Identical disc copy" : r.changed_sectors + " sectors updated") + ". File extents preserved. Saved to " + r.path;
+    } catch (e) { toast(esc(e.message), "err"); } finally { if ($("discBuild")) $("discBuild").disabled = false; }
+  };
+};
+
 $("srcExport").onclick = async () => {
   $("srcExport").disabled = true;
   $("expLog").hidden = false;
@@ -2450,28 +3027,227 @@ $("srcExport").onclick = async () => {
   } catch (e) { toast(esc(e.message), "err"); } finally { $("srcExport").disabled = false; }
 };
 
+$("compilerDiagnostic").onclick = () => {
+  const body = dialog("Compare compiler passes", '<p>Compare two C attempts with the selected function\'s compiler and unit context. The result shows the first observed RTL dump difference. It does not compare against the original compiler\'s RTL.</p>'
+    + '<label class="field"><span>Function</span><input id="rtlFunction"></label>'
+    + '<label class="field"><span>Attempt A</span><textarea id="rtlLeft" rows="8" maxlength="65536"></textarea></label>'
+    + '<label class="field"><span>Attempt B</span><textarea id="rtlRight" rows="8" maxlength="65536"></textarea></label>'
+    + '<button class="primary" id="rtlCompare" type="button">Compare</button><pre class="joblog tall" id="rtlResult"></pre>');
+  body.querySelector("#rtlCompare").onclick = async () => {
+    $("rtlCompare").disabled = true;
+    try {
+      const { job } = await api("/api/compiler/diagnostics", { method: "POST", body: { slug: S.slug, function: $("rtlFunction").value.trim(), left: $("rtlLeft").value, right: $("rtlRight").value } });
+      const r = await followJob(job);
+      $("rtlResult").textContent = (r.first_difference ? "First observed difference: " + r.first_difference : "Captured dumps are equal") + "\n" + r.diff + "\n" + r.interpretation + "\nLocal artifacts: " + r.path;
+    } catch (e) { toast(esc(e.message), "err"); } finally { if ($("rtlCompare")) $("rtlCompare").disabled = false; }
+  };
+};
+
 /* ------------------------------------------------------------------ project settings */
 async function renderProjectSettings() {
   const ov = S.ov;
   if (!ov) return;
   const fork = ov.kind === "fork";
+  const smsProfile = $("smsProfilePanel");
+  smsProfile.hidden = !ov.sms_profile || fork || ov.room?.role === "guest";
+  if (!smsProfile.hidden) window.SMSProfileUI.render(smsProfile, ov.sms_profile, async (choice) => {
+    try {
+      await api("/api/sms/profile", { method: "POST", body: { slug: S.slug, ...choice } });
+      S.ov = await api(`/api/project?slug=${encodeURIComponent(S.slug)}`);
+      renderProjectSettings();
+      toast("Cartridge profile saved.");
+    } catch (e) { toast(esc(e.message), "err"); }
+  });
   $("compilerPanel").hidden = fork;
+  $("compilerDiagnostic").hidden = fork || !["psx", "ps2"].includes(ov.platform);
   if (!fork) {
     if (!S.st) await loadState();
-    fillCompilers($("setTc"), ov.compiler.toolchain, { n64: "N64", psx: "PS1", ps2: "PS2", gba: "GBA" }[ov.platform]);
-    $("setFlags").value = ov.compiler.flags.join(" ");
+    const unit = $("setCompilerUnit").value;
+    $("setCompilerUnit").innerHTML = '<option value="">Project default</option>' + (ov.compiler.unit_names || []).filter(Boolean).map((u) => `<option value="${esc(u)}">${esc(u)}${ov.compiler.units?.[u] ? " (override)" : ""}</option>`).join("");
+    $("setCompilerUnit").value = unit;
+    fillCompilerSettings();
   }
   const facts = [["Platform", ov.platform_name], ["Game", ov.rom?.title || ov.title], [fork ? "Version" : "Game code", ov.rom?.game_code || ov.version],
     !fork && ov.rom?.region ? ["Region", ov.rom.region] : null, fork ? ["Layout", ov.origin === "scratch" ? (LAYOUT[ov.platform] || "decomp") + " (from scratch)" : ov.fork_kind] : ["Compiler", `${ov.compiler.name} ${ov.compiler.flags.join(" ")}`],
     fork && ov.repo_url ? ["Repository", ov.repo_url.replace(/^https?:\/\//, "")] : null,
+    // what built a banked game, as its bytes say: a compiler (C), or none found (most likely assembly)
+    ov.built_with ? ["Built with", `${ov.built_with.tool}${ov.built_with.version ? " " + ov.built_with.version : ""}${ov.built_with.language ? ` (${ov.built_with.language})` : ""}${ov.built_with.pinned === false && ov.built_with.language === "C" ? ": not the pinned compiler" : ""}`]
+      : ov.built_with === null ? ["Built with", "no compiler's code found: most likely hand-written assembly (the assembly track)"] : null,
     ["Functions", `${ov.functions.toLocaleString()} (${bytes(ov.bytes || 0)} of code)`], ["Folder", ov.folder]].filter(Boolean);
   $("projFacts").innerHTML = facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v || "—")}</dd></div>`).join("");
+  // splitting again: the banked lanes, on a project of the user's own (a room member's copy follows its host's)
+  const banked = ["gb", "gbc", "sms", "gg", "nes"].includes(ov.platform) && !fork && ov.room?.role !== "guest";
+  if ($("resplitPanel").hidden === banked) { $("resplitApply").hidden = true; $("resplitResult").innerHTML = ""; $("resplitLog").hidden = true; }
+  $("resplitPanel").hidden = !banked;
+  const corrects = ["gb", "gbc", "sms", "gg", "nes"].includes(ov.platform) && !fork && ov.room?.role !== "guest";
+  $("correctionsPanel").hidden = !corrects;
+  // (NES: coverage from an emulator only, for now: no corrections or symbol files yet)
+  const nesOnly = ov.platform === "nes";
+  for (const id of ["corrIntro", "correctionsList", "symHead", "symText", "symRow", "covHead"]) $(id).hidden = nesOnly;
+  $("corrTitle").textContent = nesOnly ? "Coverage from an emulator" : "Corrections to the split";
+  if (corrects) loadCorrections();
 }
+
+/* Corrections agents made to the split (Game Boy, Master System), each with its reason, undoable; the user's own symbol file;
+   and coverage from an emulator (those and the NES). */
+async function loadCorrections() {
+  const slug = S.slug;
+  let r;
+  try { r = await api(`/api/corrections?slug=${slug}`); } catch { return; }
+  if (slug !== S.slug) return;
+  showCorrections(r);
+}
+
+function showCorrections(r) {
+  const rows = r.corrections || [];
+  const when = (t) => ago(new Date(t * 1000).toISOString());
+  $("correctionsList").innerHTML = rows.length ? `<table class="fn-table corrections"><thead><tr><th>Where</th><th>What</th><th>How they know</th><th>By</th><th></th></tr></thead><tbody>${rows.map((c) => `<tr class="${c.undone ? "undone" : ""}"><td class="mono">${esc(c.where)}</td><td>${esc(c.says)}${c.count ? ` (${c.count.toLocaleString()} ${esc(c.unit)})` : ""}</td><td>${esc(c.reason || "")}</td><td class="muted small">${esc(c.by || "")}<br>${esc(when(c.at))}</td><td>${c.undone ? `<span class="muted small">undone</span>` : `<button class="ghost small-btn" data-undo="${c.id}" type="button">Undo</button>`}</td></tr>`).join("")}</tbody></table>`
+    : `<p class="muted small">None yet. Agents add them with <code>correct_split</code> when they find bytes that aren't code, a function start, a table, or a routine that reads bytes after its call.</p>`;
+  $("correctionsList").querySelectorAll("[data-undo]").forEach((b) => { b.onclick = async () => {
+    b.disabled = true;
+    try { showCorrections(await api("/api/corrections/undo", { method: "POST", body: { slug: S.slug, id: Number(b.dataset.undo) } })); }
+    catch (e) { b.disabled = false; toast(esc(e.message), "err"); }
+  }; });
+  const f = r.symbol_file;
+  $("symStatus").textContent = f ? `${f.from}: ${plural(f.names, "name")}${f.blocks ? `, ${plural(f.blocks, "block")}` : ""}` : "";
+  $("symRemove").hidden = !f;
+  const c = r.coverage;
+  $("covStatus").textContent = !c ? "" : c.error ? `${c.from}: ${c.error}` : `${c.from}: ${bytes(c.code)} ran as code, ${bytes(c.read)} read as data, ${c.entries.toLocaleString()} function ${c.entries === 1 ? "entry" : "entries"}`;
+  $("covRemove").hidden = !c;
+}
+
+$("covFile").onchange = async () => {
+  const file = $("covFile").files[0];
+  $("covFile").value = "";
+  if (!file) return;
+  $("covStatus").textContent = `reading ${file.name}…`;
+  try {
+    await api(`/api/coverage?slug=${encodeURIComponent(S.slug)}&name=${encodeURIComponent(file.name)}`, { method: "POST", raw: file });
+    toast("Coverage imported. Split the game again to use it.");
+    loadCorrections();
+  } catch (e) { $("covStatus").textContent = ""; toast(esc(e.message), "err"); }
+};
+$("covRemove").onclick = async () => {
+  try { showCorrections(await api("/api/coverage/remove", { method: "POST", body: { slug: S.slug } })); } catch (e) { toast(esc(e.message), "err"); }
+};
+
+$("symFile").onchange = async () => {
+  const file = $("symFile").files[0];
+  $("symFile").value = "";
+  if (!file) return;
+  $("symStatus").textContent = `reading ${file.name}…`;
+  try {
+    const r = await api("/api/symbols/import", { method: "POST", body: { slug: S.slug, name: file.name, text: await file.text() } });
+    toast(esc(`${plural(r.kept, "line")} kept${r.dropped ? `, ${r.dropped.toLocaleString()} left out` : ""}; ${plural(r.renamed, "function")} named. Split the game again to use its blocks.`));
+    loadCorrections();
+  } catch (e) { $("symStatus").textContent = ""; toast(esc(e.message), "err"); }
+};
+$("symRemove").onclick = async () => {
+  try { showCorrections(await api("/api/symbols/remove", { method: "POST", body: { slug: S.slug } })); } catch (e) { toast(esc(e.message), "err"); }
+};
+
+/* What splitting again would change (or did): a preview first, then the same with "apply". */
+async function resplit(apply) {
+  const btn = apply ? $("resplitApply") : $("resplitPreview");
+  btn.disabled = true;
+  $("resplitLog").hidden = false;
+  try {
+    const { job } = await api("/api/resplit", { method: "POST", body: { slug: S.slug, apply } });
+    const r = await followJob(job, $("resplitLog"));
+    $("resplitResult").innerHTML = `<div class="notice ${apply ? "room" : ""}"><span>${apply ? "<b>Split again.</b> " : ""}${plural(r.before, "function")} → ${plural(r.after, "function")}: ${r.kept.toLocaleString()} unchanged keep their work, ${r.added.toLocaleString()} new, ${r.removed.toLocaleString()} ${apply ? "gone" : "would go"}; all ${r.matched_kept.toLocaleString()} matched kept${r.notes_moved ? `, notes of ${plural(r.notes_moved, "function")} ${apply ? "moved" : "would move"}` : ""}.${r.data_after || r.data_before ? ` Functions cover ${bytes(r.bytes_before)} → ${bytes(r.bytes_after)}; ${bytes(r.data_after)} ${apply ? "is" : "would be"} shown as data (tables, padding, bytes the code never reaches), not handed out as functions${r.data_before ? ` (${bytes(r.data_before)} before)` : ""}.` : ""}${r.corrections ? ` With ${plural(r.corrections, "correction")} from below.` : ""}</span></div>`;
+    $("resplitApply").hidden = apply;
+    if (apply) { S.ov = await api(`/api/project?slug=${S.slug}`); renderProjectSettings(); poll(false); }
+  } catch (e) { toast(esc(e.message), "err"); } finally { btn.disabled = false; }
+}
+$("resplitPreview").onclick = () => resplit(false);
+$("resplitApply").onclick = () => resplit(true);
 $("setTcReset").onclick = () => { $("setFlags").value = ""; };
+function fillCompilerSettings() {
+  const c = S.ov.compiler, unit = $("setCompilerUnit").value, override = c.units?.[unit] || {};
+  const tc = override.toolchain || c.toolchain;
+  fillCompilers($("setTc"), tc, { n64: "N64", psx: "PS1", ps2: "PS2", gba: "GBA" }[S.ov.platform]);
+  $("setFlags").value = (override.flags || (tc === c.toolchain ? c.flags : [])).join(" ");
+  $("setAspsxField").hidden = S.ov.platform !== "psx";
+  $("setAspsx").value = override.aspsx ?? c.aspsx ?? "";
+  $("compilerProbePanel").hidden = S.ov.platform !== "psx";
+  showCompilerProbe(c.probe);
+  $("psyqPanel").hidden = S.ov.platform !== "psx";
+  showPsyqLibraries(c.libraries);
+  $("psxDebugPanel").hidden = S.ov.platform !== "psx";
+  $("smallDataPanel").hidden = S.ov.platform !== "psx";
+  showSmallData(c.small_data);
+  $("setUnitReset").hidden = !unit;
+}
+$("setCompilerUnit").onchange = fillCompilerSettings;
+function showSmallData(report) {
+  const box = $("smallDataResult");
+  if (!report) { box.innerHTML = ""; return; }
+  const unit = $("setCompilerUnit").value || report.default_unit, row = report.units[unit];
+  box.innerHTML = `<p class="muted small">GP base: ${report.gp_known ? hex8(report.gp) : "unused or unresolved"} · ${esc(report.gp_source || "")}. ${esc(report.note)}</p>`
+    + (row ? `<p class="muted small">${esc(unit)}: ${row.gp_accesses} GP-relative accesses (${row.resolved_accesses} resolved). Active -G${row.active_threshold ?? "?"}; layout trial values ${row.layout_candidates.join(", ") || "not established"}. ${esc(row.note)}</p>`
+      + (row.objects.length ? `<table class="small"><thead><tr><th>Symbol</th><th>Estimated extent</th><th>GP accesses</th></tr></thead><tbody>${row.objects.slice(0, 20).map((o) => `<tr><td>${esc(o.name)}</td><td>${o.estimated_size} bytes</td><td>${o.accesses}</td></tr>`).join("")}</tbody></table>` : "") : "");
+}
+$("smallDataInspect").onclick = async () => {
+  try {
+    S.ov.compiler.small_data = await api("/api/compiler/small-data", { method: "POST", body: { slug: S.slug } });
+    showSmallData(S.ov.compiler.small_data);
+  } catch (e) { toast(esc(e.message), "err"); }
+};
+function showCompilerProbe(probe) {
+  const box = $("compilerProbeResult");
+  if (!probe) { box.innerHTML = ""; return; }
+  box.innerHTML = `<p class="muted small">Unit ${esc(probe.unit || "(unnamed)")} · ${esc(probe.confidence)} · ${probe.samples.length} samples${probe.truncated ? " · budget reached" : ""}${probe.stale ? " · settings have changed; compare again" : ""}</p><p class="muted small">${esc(probe.note)}</p>`
+    + (probe.results.length ? `<table class="small"><thead><tr><th>Compiler / flags</th><th>Assembler</th><th>Compiled</th><th>Exact</th><th>Mean match</th></tr></thead><tbody>${probe.results.slice(0, 12).map((r) => `<tr><td>${esc(r.toolchain)}<br><code>${esc(r.flags.join(" "))}</code></td><td>${esc(r.aspsx || "GNU")}</td><td>${r.compiled}/${probe.samples.length}</td><td>${r.exact}/${probe.samples.length}</td><td>${r.percent.toFixed(1)}%</td></tr>`).join("")}</tbody></table>` : "");
+}
+$("compilerProbe").onclick = async () => {
+  const btn = $("compilerProbe");
+  btn.disabled = true;
+  $("compilerProbeLog").hidden = false;
+  try {
+    const { job } = await api("/api/compiler/probe", { method: "POST", body: { slug: S.slug, unit: $("setCompilerUnit").value, expanded: $("compilerProbeExpanded").checked } });
+    const result = await followJob(job, $("compilerProbeLog"));
+    S.ov.compiler.probe = result;
+    showCompilerProbe(result);
+  } catch (e) { toast(esc(e.message), "err"); } finally { btn.disabled = false; }
+};
+function showPsyqLibraries(report) {
+  const box = $("psyqResult");
+  if (!report) { box.innerHTML = ""; return; }
+  box.innerHTML = `<p class="muted small">${report.signatures} usable signatures · ${report.weak_signatures_skipped} weak signatures skipped · ${report.label_count} labels · ${report.conflict_count} conflicts · ${report.applied} functions recognized${report.truncated ? " · incomplete scan; nothing applied" : ""}</p><p class="muted small">SDK candidates: ${esc((report.best_sdk_versions || []).join(", ") || "none")}. ${esc(report.note)}</p>`
+    + (report.hits.length ? `<table class="small"><thead><tr><th>Unit</th><th>Address</th><th>Library symbol</th><th>SDK</th></tr></thead><tbody>${report.hits.slice(0, 100).map((h) => `<tr><td>${esc(h.unit)}</td><td>${hex8(h.address)}</td><td>${esc(h.name)}</td><td>${esc(h.versions.join(", "))}</td></tr>`).join("")}</tbody></table>` : "");
+}
+async function scanPsyqLibraries(apply, files) {
+  $("psyqScan").disabled = true; $("psyqApply").disabled = true;
+  $("psyqLog").hidden = false;
+  try {
+    const { job } = await api("/api/libraries/psyq", { method: "POST", body: { slug: S.slug, files, apply, unit: $("setCompilerUnit").value || null } });
+    const result = await followJob(job, $("psyqLog"));
+    S.ov.compiler.libraries = result;
+    showPsyqLibraries(result);
+    if (apply) poll(false);
+  } catch (e) { toast(esc(e.message), "err"); } finally { $("psyqScan").disabled = false; $("psyqApply").disabled = false; }
+}
+$("psyqScan").onclick = () => scanPsyqLibraries(false);
+$("psyqApply").onclick = () => scanPsyqLibraries(true);
+$("psyqFiles").onchange = async () => {
+  const files = Array.from($("psyqFiles").files);
+  $("psyqFiles").value = "";
+  if (!files.length) return;
+  if (files.length > 64 || files.reduce((n, f) => n + f.size, 0) > 50 * 1024 * 1024) { toast("Choose at most 64 files, up to 50 MiB total.", "err"); return; }
+  const version = $("psyqVersion").value.trim() || "unknown";
+  await scanPsyqLibraries(false, await Promise.all(files.map(async (f) => ({ version, text: await f.text() }))));
+};
+$("setUnitReset").onclick = async () => {
+  try {
+    S.ov = await api("/api/compiler", { method: "POST", body: { slug: S.slug, unit: $("setCompilerUnit").value } });
+    renderProjectSettings();
+    toast("Unit uses the project default.");
+  } catch (e) { toast(esc(e.message), "err"); }
+};
 $("setTcSave").onclick = async () => {
   try {
     const flags = $("setFlags").value.trim();
-    S.ov = await api("/api/compiler", { method: "POST", body: { slug: S.slug, toolchain: $("setTc").value, flags: flags ? flags.split(/\s+/) : null } });
+    S.ov = await api("/api/compiler", { method: "POST", body: { slug: S.slug, unit: $("setCompilerUnit").value, toolchain: $("setTc").value, flags: flags ? flags.split(/\s+/) : null, aspsx: $("setAspsx").value } });
     renderStats(S.ov);
     renderProjectSettings();
     toast("Compiler settings saved.");
@@ -2502,20 +3278,25 @@ $("resetProgressBtn").onclick = () => {
     } catch (e) { toast(esc(e.message), "err"); $("resetProgressGo").disabled = false; }
   };
 };
-$("deleteBtn").onclick = () => {
-  dialog("Remove project", `<p>Remove <b>${esc(S.ov.title)}</b> from decomp.wtf? Matched functions and notes are deleted.</p>
-    <label class="check"><input type="checkbox" id="delFiles"><span>Also delete the project folder (your ROM copy and exported sources in it)</span></label>
+/* Remove a project: from its own page, or from the sidebar for one that can't be opened (`broken` says why) and so has no
+   page to remove it from. */
+function askRemove(slug, title, broken) {
+  dialog("Remove project", `<p>${broken
+      ? `<b>${esc(title)}</b> can't be opened (${esc(broken)}). Remove it, then import the game again.`
+      : `Remove <b>${esc(title)}</b> from decomp.wtf? Matched functions and notes are deleted.`}</p>
+    <label class="check"><input type="checkbox" id="delFiles" ${broken ? "checked" : ""}><span>Also delete the project folder (your ROM copy and exported sources in it)</span></label>
     <div class="row"><button class="primary" id="delGo" type="button">Remove</button><button class="ghost" data-close type="button">Cancel</button></div>`);
   $("delGo").onclick = async () => {
     try {
-      await api("/api/delete", { method: "POST", body: { slug: S.slug, files: $("delFiles").checked } });
+      await api("/api/delete", { method: "POST", body: { slug, files: $("delFiles").checked } });
       $("dialog").hidden = true;
       document.body.classList.remove("locked");
       loadNav();
-      location.hash = "#/";
+      if (slug === S.slug) location.hash = "#/";
     } catch (e) { toast(esc(e.message), "err"); }
   };
-};
+}
+$("deleteBtn").onclick = () => askRemove(S.slug, S.ov.title);
 
 /* ------------------------------------------------------------------ agents & models page */
 async function showAgentsPage() {
@@ -2529,7 +3310,7 @@ function renderAgentsPage() {
   $("agList").innerHTML = rows.map((a) => `<div class="agent-row">
       <div class="ar-head"><b>${esc(a.name)}</b><span class="muted small">${esc(a.vendor)}</span><span class="grow"></span>
         ${a.installed ? `<span class="ok-mark">installed</span>` : `<button class="primary small-btn" data-inst="${esc(a.id)}" type="button" ${a.needs ? "disabled" : ""}>Install</button>`}</div>
-      ${a.installed ? `<dl class="facts"><div><dt>Version</dt><dd>${esc(a.version || "?")}</dd></div><div><dt>Default model</dt><dd>${esc(a.default_model || "the app's own")}</dd></div><div><dt>Models offered</dt><dd>${(a.models || []).length ? (a.models || []).length : "any you type"}</dd></div></dl>
+      ${a.installed ? `<dl class="facts"><div><dt>Version</dt><dd>${esc(a.version || "?")}</dd></div><div><dt>Default model</dt><dd>${esc(a.default_model || "the app's own")}</dd></div><div><dt>Models offered</dt><dd>${(a.models || []).length ? (a.models || []).length : "any you type"}</dd></div>${a.id === "codex" ? `<div><dt>Default effort</dt><dd>${esc(a.default_effort || "the model's own")}</dd></div>` : ""}</dl>
         ${(a.models || []).length ? `<div class="model-chips">${a.models.slice(0, 12).map((m) => `<span class="chip-s mono" title="${esc(m.note || "")}">${esc(m.name)}</span>`).join("")}${a.models.length > 12 ? `<span class="muted small">+${a.models.length - 12} more</span>` : ""}</div>` : ""}
         <p class="muted small">${esc(a.signin)}</p>`
       : `<p class="muted small">${a.needs ? `Needs ${esc(a.needs)} first. ` : ""}Or install it yourself:</p>${cmdBox(a.install)}`}
@@ -2636,7 +3417,7 @@ async function showSettingsPage() {
     <div class="field"><span>Updates come from ${from}</span><div class="row"><span class="muted small grow" id="upText">Checking…</span><button class="ghost small-btn" id="upCheck" type="button">Check now</button></div></div>
     <label class="check"><input type="checkbox" id="checkUpdateSet" ${st.settings.check_updates ? "checked" : ""}><span><b>Look for updates</b> now and then (it only asks ${inst.channel === "branch" ? "GitHub for the branch's newest commit" : "decomp.wtf which version is current"}; nothing about you or your projects is sent).</span></label>
     <label class="check"><input type="checkbox" id="autoUpdateSet" ${st.settings.auto_update ? "checked" : ""}><span><b>Install updates by itself</b> when no helper agent is working (it restarts in a few seconds; agents carry on).</span></label>
-    <div class="row"><a class="link small" href="https://decomp.wtf" target="_blank" rel="noopener">decomp.wtf</a><a class="link small" href="https://github.com/i12bp8/decomp.wtf" target="_blank" rel="noopener">Source code</a></div>`;
+    <div class="row"><a class="link small" href="https://decomp.wtf" target="_blank" rel="noopener">decomp.wtf</a><a class="link small" href="https://github.com/SynapticDreams/decomp.wtf" target="_blank" rel="noopener">Source code</a></div>`;
   const showUpdate = (u) => {
     if (!$("upText") || !u) return;
     $("upText").textContent = u.error ? u.error : u.available ? `New: ${updateName(u)}` : u.disabled ? "Not looking for updates." : "Up to date.";
@@ -2745,3 +3526,20 @@ loadNav();
 route();
 setTimeout(() => checkUpdate(false, true), 4000);
 setInterval(() => checkUpdate(false, true), 10 * 60 * 1000);
+
+async function importPsxDebug(apply) {
+  const files = Array.from($("psxDebugFiles").files);
+  if (!files.length || files.length > 64 || files.reduce((n, f) => n + f.size, 0) > 64 * 1024 * 1024) { toast("Choose 1–64 debug files, up to 64 MiB total.", "err"); return; }
+  $("psxDebugPreview").disabled = true; $("psxDebugApply").disabled = true;
+  try {
+    const encoded = await Promise.all(files.map((f) => new Promise((resolve, reject) => {
+      const r = new FileReader(); r.onload = () => resolve({ name: f.name, data: r.result.split(",")[1] }); r.onerror = reject; r.readAsDataURL(f);
+    })));
+    const { job } = await api("/api/debug/psx", { method: "POST", body: { slug: S.slug, files: encoded, apply, unit: $("setCompilerUnit").value || null } });
+    const result = await followJob(job, $("psxDebugResult"));
+    $("psxDebugResult").textContent = JSON.stringify(result, null, 2);
+    if (apply) poll(false);
+  } catch (e) { toast(esc(e.message), "err"); } finally { $("psxDebugPreview").disabled = false; $("psxDebugApply").disabled = false; }
+}
+$("psxDebugPreview").onclick = () => importPsxDebug(false);
+$("psxDebugApply").onclick = () => importPsxDebug(true);

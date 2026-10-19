@@ -1,0 +1,162 @@
+{
+  "version": 1,
+  "provenance": "Original synthetic C and instruction fixtures authored for this repository; no retail program bytes or SDK signatures.",
+  "flags": [
+    "-O2",
+    "-G8"
+  ],
+  "compiler_cases": [
+    {
+      "id": "signed_narrow",
+      "header": "",
+      "source": "int fixture(short x) { return x * 3 + 1; }"
+    },
+    {
+      "id": "plain_char_load",
+      "header": "",
+      "source": "int fixture(char *p) { return p[0] + p[1]; }"
+    },
+    {
+      "id": "constant_division",
+      "header": "",
+      "source": "int fixture(int x) { return x / 10; }"
+    },
+    {
+      "id": "gp_counter",
+      "header": "",
+      "source": "int counter = 3; int fixture(int x) { counter += x; return counter; }"
+    },
+    {
+      "id": "copy_loop",
+      "header": "",
+      "source": "void fixture(int *d, const int *s) { int i; for (i = 0; i < 16; ++i) d[i] = s[i]; }"
+    },
+    {
+      "id": "dense_switch",
+      "header": "extern int sink(int);",
+      "source": "int fixture(int x) { switch (x) { case 0: return sink(5); case 1: return sink(19); case 2: return sink(7); case 3: return sink(31); case 4: return sink(2); case 5: return sink(43); case 6: return sink(11); case 7: return sink(3); default: return -1; } }",
+      "native_unsupported": [
+        "gcc-2.8.1-psx",
+        "gcc-2.7.2-cdk",
+        "gcc-2.8.0-psx",
+        "gcc-2.91.66-psx",
+        "gcc-2.95.2-psx"
+      ],
+      "limitation": "The native binutils 2.6 assembler rejects explicit hi/lo operands for ASPSX local labels; use the ASPSX recipe for this case."
+    },
+    {
+      "id": "aggregate_return",
+      "header": "struct Pair { int x, y; };",
+      "source": "struct Pair fixture(int x) { struct Pair p; p.x = x; p.y = x + 1; return p; }"
+    },
+    {
+      "id": "gte_transform",
+      "header": "",
+      "source": "void fixture(SVECTOR *v, int *out) { gte_ldv0(v); gte_rtps(); gte_stsxy(out); }"
+    }
+  ],
+  "instruction_cases": [
+    {
+      "id": "return_delay_slot",
+      "words": [
+        "03E00008",
+        "00851021"
+      ],
+      "traits": {
+        "leaf": true,
+        "frame_bytes": 0,
+        "argument_registers": [
+          "a0",
+          "a1"
+        ]
+      }
+    },
+    {
+      "id": "bios_a0_memcpy",
+      "words": [
+        "240A00A0",
+        "01400008",
+        "2409002A"
+      ],
+      "traits": {
+        "frame_bytes": 0
+      },
+      "bios_api": "memcpy"
+    },
+    {
+      "id": "gte_command",
+      "words": [
+        "4A180001",
+        "03E00008",
+        "00000000"
+      ],
+      "traits": {
+        "gte_instructions": 1,
+        "leaf": true
+      }
+    },
+    {
+      "id": "resolved_io",
+      "words": [
+        "3C081F80",
+        "AD041810",
+        "03E00008",
+        "00000000"
+      ],
+      "traits": {
+        "leaf": true
+      },
+      "memory_kind": "I/O range"
+    },
+    {
+      "id": "gp_word_load",
+      "words": [
+        "8F820004",
+        "03E00008",
+        "00000000"
+      ],
+      "traits": {
+        "leaf": true,
+        "frame_bytes": 0
+      },
+      "gp_accesses": 1
+    },
+    {
+      "id": "invalid_instruction",
+      "words": [
+        "FFFFFFFF"
+      ],
+      "traits": {
+        "frame_bytes": null
+      }
+    },
+    {
+      "id": "saved_frame",
+      "words": [
+        "27BDFFE0",
+        "AFBF001C",
+        "AFB00018",
+        "00808021",
+        "8FA20030",
+        "0C004000",
+        "00A02021",
+        "8FBF001C",
+        "03E00008",
+        "27BD0020"
+      ],
+      "traits": {
+        "frame_bytes": 32,
+        "saved_registers": {
+          "ra": -4,
+          "s0": -8
+        },
+        "argument_registers": [
+          "a0",
+          "a1"
+        ],
+        "direct_calls": 1,
+        "leaf": false
+      }
+    }
+  ]
+}

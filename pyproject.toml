@@ -1,6 +1,6 @@
 [project]
 name = "decompnet"
-version = "0.10.6"
+version = "0.10.7"
 description = "decomp.wtf (What The Function): your AI agent decompiles games you own into C that compiles to the exact same bytes, with a live view. Runs locally."
 readme = "README.md"
 license = "MIT"
@@ -17,6 +17,7 @@ dependencies = [
     "spimdisasm>=1.42.4",
     "rabbitizer>=1.16.2",
     "httpx>=0.28",
+    "cryptography>=44",  # rooms' keys (Ed25519): a room shows it's the one its members joined, wherever it is
     "uvicorn>=0.30",
     "ninja>=1.11",  # builds GameCube/Wii (dtk) and other ninja-based decomp projects
     "truststore>=0.10; sys_platform == 'win32'",  # HTTPS verified by Windows itself (see decompnet/__init__.py)
@@ -24,8 +25,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://decomp.wtf"
-Source = "https://github.com/i12bp8/decomp.wtf"
+Homepage = "https://github.com/SynapticDreams/decomp.wtf"
+Source = "https://github.com/SynapticDreams/decomp.wtf"
 
 [project.scripts]
 decompnet = "decompnet.cli:main"
@@ -43,3 +44,7 @@ dev = [
 [tool.pytest.ini_options]
 # the room tests drive the room server through Starlette's TestClient, which warns about the timeouts real clients use
 filterwarnings = ["ignore:You should not use the 'timeout' argument with the TestClient"]
+
+[tool.ruff.lint]
+# real problems only (what CI checks): undefined or unused names, syntax errors; no style rules
+select = ["F", "E9"]

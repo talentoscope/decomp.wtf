@@ -25,6 +25,7 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from .. import similarity, toolchains
+from ..forks import policy as contribution_policy
 from ..forks import catalog, csource, datadiff, drafts, dtksplits, ghidra, scratch_dsd, scratch_dtk
 from ..forks.objdiff import ObjdiffError
 from ..forks.project import EDITABLE, STATE, ForkError, ForkProject
@@ -405,6 +406,13 @@ class ForkEngine:
             raise NetworkError("give a GitHub/GitLab/Codeberg repository URL (https://github.com/owner/repo)")
         return {"repo": m.group(1), **policy.check(m.group(1))}
 
+    def review_policy(self, slug: str) -> dict:
+        proj, fp, cfg = self.get(slug)
+        review = contribution_policy.inspect(fp.root, working_tree=True)
+        cfg["contribution_policy"] = review
+        self._save_cfg(proj, cfg)
+        return review
+
     def clone(self, repo: str, *, name: str = "", platform: str = "", version: str | None = None, log=print) -> str:
         repo = repo.strip()
         local = Path(repo).expanduser()
@@ -432,7 +440,8 @@ class ForkEngine:
         versions = fp.versions()
         version = version if version in versions else (versions[0] if versions else version)
         cfg = {"kind": "fork", "repo_url": url, "platform": platform, "version": version, "fork_kind": kind,
-               "ready": False, "legal": {"basis": "personal-copy", "license": "the project's own license"}}
+               "ready": False, "contribution_policy": contribution_policy.inspect(dest),
+               "legal": {"basis": "personal-copy", "license": "the project's own license"}}
         self._register(slug, name or url.rstrip("/").split("/")[-1], f"fork of {url}", dest, cfg, f"cloned {url}")
         log(f"cloned into {dest} ({kind} project)")
         return slug
@@ -807,7 +816,7 @@ class ForkEngine:
             for module, mod in mods.items():
                 for f in dtksplits.Splits.parse(mod.splits.read_text(encoding="utf-8")).files:
                     if f.name == name:
-                        lines.append(f"{module} sections: " + ", ".join(f"{k} 0x{a:X}-0x{b:X}" for k, (a, b) in f.sections.items())
+                        lines.append(f"{module} sections: " + ", ".join(f"{s.name} 0x{s.start:X}-0x{s.end:X}" for s in f.sections)
                                      + " (split_file divides it)")
         except (NetworkError, OSError):
             pass
@@ -955,7 +964,7 @@ class ForkEngine:
                     saved.setdefault(sp_path, sp_path.read_text(encoding="utf-8"))
                     sp = dtksplits.Splits.parse(saved[sp_path])
                     for _, name, start, end, _n in items:
-                        sp.files.append(dtksplits.FileSplit(name, {".text": (start, end)}))
+                        sp.files.append(dtksplits.FileSplit(name, [dtksplits.SectionSplit(".text", start, end)]))
                         p = fp.root / src / name
                         p.parent.mkdir(parents=True, exist_ok=True)
                         common = '#include "common.h"\n' if (fp.root / "include" / "common.h").is_file() else ""
@@ -1024,10 +1033,13 @@ class ForkEngine:
         if fp.link_states().get(rel, ("",))[0] != "NonMatching":
             raise NetworkError(f"{rel} is linked (or not in configure.py): a linked file is finished, don't split it")
         f = next(x for x in sp.files if x.name == name)
-        if ".text" not in f.sections:
+        text_sections = [s for s in f.sections if s.name == ".text"]
+        if not text_sections:
             raise NetworkError(f"{rel} has no code to split")
+        if len(text_sections) != 1:
+            raise NetworkError(f"{rel} has several .text ranges: split_file needs one contiguous code range")
         syms = dtksplits.symbols(mod.symbols)
-        lo, hi = f.sections[".text"]
+        lo, hi = text_sections[0].start, text_sections[0].end
         where = at.strip()
         if where in syms and syms[where][0] == ".text":
             addr = syms[where][1]
@@ -1049,19 +1061,26 @@ class ForkEngine:
         if not fp.safe_path(f"{src}/{new}", write=True) or (fp.root / src / new).exists() or \
                 any(x.name == new for x in sp.files):
             raise NetworkError(f"{src}/{new} exists already: pick another new_name")
-        moved_sections = {".text": (addr, hi)}
-        kept = dict(f.sections, **{".text": (lo, addr)})
+        cuts = {".text": addr}
         for part in data.replace(",", " ").split():
             sec, _, start = part.partition(":")
-            if sec not in f.sections or sec == ".text":
-                raise NetworkError(f"{rel} has no {sec} part to split (it has {', '.join(f.sections)})")
-            a, b = f.sections[sec]
+            ranges = [s for s in f.sections if s.name == sec]
+            if not ranges or sec == ".text":
+                raise NetworkError(f"{rel} has no {sec} part to split (it has {', '.join(s.name for s in f.sections)})")
+            if len(ranges) != 1:
+                raise NetworkError(f"{rel} has several {sec} ranges: split_file needs one contiguous data range")
+            a, b = ranges[0].start, ranges[0].end
             cut = int(start, 16)
             if not a <= cut <= b:
                 raise NetworkError(f"{sec}:{start} is outside {rel}'s {sec} (0x{a:X}-0x{b:X})")
-            moved_sections[sec] = (cut, b)
-            kept[sec] = (a, cut)
-        kept = {k: v for k, v in kept.items() if v[1] > v[0]}
+            cuts[sec] = cut
+        kept, moved_sections = [], []
+        for sec in f.sections:
+            cut = cuts.get(sec.name, sec.end)
+            if cut > sec.start:
+                kept.append(dtksplits.SectionSplit(sec.name, sec.start, cut, sec.extra))
+            if cut < sec.end:
+                moved_sections.append(dtksplits.SectionSplit(sec.name, cut, sec.end, sec.extra))
 
         old_path, new_path = fp.root / src / name, fp.root / src / new
         conf = fp.root / "configure.py"
@@ -1712,7 +1731,10 @@ class ForkEngine:
 
     def _claim_in_room(self, link, agent: Agent, slug: str, function: str | None, strategy: str) -> str:
         """A member of a room: the host hands out functions (nobody does one twice); the brief comes from this copy."""
-        name = link.claim(agent, self._fn(slug, function)["name"] if function else None, strategy)
+        if function is None and strategy in ("quick", "close"):  # a Focus: picked here, asked for by name
+            name = self.net._room_focus_claim(link, agent, slug, strategy)
+        else:
+            name = link.claim(agent, self._fn(slug, function)["name"] if function else None, strategy)
         if name is None:
             return "Nothing left to claim in this room: every function with a source file matches or someone is on it. 🎉"
         try:
@@ -2335,7 +2357,8 @@ class ForkEngine:
         proj, fp, cfg = self.get(slug)
         agg = self.net.store.one(
             "SELECT COUNT(*) AS total, SUM(status='matched') AS matched, SUM(size) AS bytes, "
-            "SUM(CASE WHEN status='matched' THEN size ELSE 0 END) AS matched_bytes, SUM(attempts) AS attempts "
+            "SUM(CASE WHEN status='matched' THEN size ELSE 0 END) AS matched_bytes, SUM(attempts) AS attempts, SUM(status='asm') AS asm, "
+            "SUM(CASE WHEN status='asm' THEN size ELSE 0 END) AS asm_bytes "
             "FROM functions WHERE project_id=?", proj["id"])
         m = cfg.get("measures") or {}
         need = fp.needs(cfg.get("version")) if not cfg.get("ready") else None
@@ -2343,6 +2366,7 @@ class ForkEngine:
             "slug": slug, "title": proj["name"], "description": proj["description"], "kind": "fork",
             "platform": cfg.get("platform"), "platform_name": catalog.PLATFORMS.get(cfg.get("platform"), cfg.get("platform") or ""),
             "repo_url": cfg.get("repo_url"), "fork_kind": cfg.get("fork_kind"), "version": cfg.get("version"),
+            "contribution_policy": cfg.get("contribution_policy"),
             "origin": cfg.get("origin"), "compiler_name": cfg.get("compiler"),
             "versions": fp.versions(), "ready": bool(cfg.get("ready")), "needs": need,
             "rom": {"game_code": cfg.get("version") or "", "region": catalog.PLATFORMS.get(cfg.get("platform"), ""),
@@ -2352,6 +2376,7 @@ class ForkEngine:
             "compilers": [],
             "functions": agg["total"] or 0, "matched": agg["matched"] or 0, "bytes": agg["bytes"] or 0,
             "matched_bytes": agg["matched_bytes"] or 0, "attempts": agg["attempts"] or 0,
+            "asm": agg["asm"] or 0, "asm_bytes": agg["asm_bytes"] or 0,
             "context_version": 0, "folder": proj["root"], "room": self.net._room_info(slug),
             "measures": m, "uncovered": self.uncovered(slug) if cfg.get("ready") and fp.linkable() else None,
             "rebuild": (fp.manifest or {}).get("rebuild") if cfg.get("origin") == "scratch" else None,

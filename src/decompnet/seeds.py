@@ -22,9 +22,7 @@ M2C_TARGETS = {
     "ee-gcc-2.96": "mipsee-gcc-c",
     "ido-7.1": "mips-ido-c",
     "ido-5.3": "mips-ido-c",
-    "gcc-2.5.7-psx": "mipsel-gcc-c",
-    "gcc-2.7.2-psx": "mipsel-gcc-c",
-    "gcc-2.8.1-psx": "mipsel-gcc-c",
+    **{tc.id: "mipsel-gcc-c" for tc in toolchains.registry().values() if tc.platform == "PS1"},
     "agbcc": "gba-gcc-c",
 }
 # What m2c's --valid-syntax output needs to compile: its unknown types and macros, defined the simplest way that

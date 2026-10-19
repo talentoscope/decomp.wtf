@@ -44,9 +44,14 @@ CREATE TABLE IF NOT EXISTS symbols(
   project_id INTEGER NOT NULL, name TEXT NOT NULL, address INTEGER NOT NULL, size INTEGER NOT NULL DEFAULT 0,
   kind TEXT NOT NULL DEFAULT 'data', preview TEXT, PRIMARY KEY(project_id, name));
 CREATE INDEX IF NOT EXISTS idx_symbols_addr ON symbols(project_id, address);
+-- banked lanes: the stretches of the ROM the split found aren't code (tables, padding, data), so no function covers them
 CREATE TABLE IF NOT EXISTS data_regions(
-  project_id INTEGER NOT NULL, rom_offset INTEGER NOT NULL, size INTEGER NOT NULL,
-  kind TEXT NOT NULL, why TEXT, PRIMARY KEY(project_id, rom_offset));
+  project_id INTEGER NOT NULL, rom_offset INTEGER NOT NULL, size INTEGER NOT NULL, kind TEXT NOT NULL, why TEXT,
+  PRIMARY KEY(project_id, rom_offset));
+-- banked lanes: what agents (or a person) established about the split, used when the game is split again
+CREATE TABLE IF NOT EXISTS corrections(
+  id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, kind TEXT NOT NULL, rom_offset INTEGER NOT NULL,
+  cpu INTEGER, count INTEGER NOT NULL DEFAULT 0, reason TEXT, agent_id INTEGER, created_at REAL, undone_at REAL);
 CREATE TABLE IF NOT EXISTS twin_misses(
   function_id INTEGER NOT NULL, source_hash TEXT NOT NULL, project_id INTEGER, at REAL, why TEXT,
   PRIMARY KEY(function_id, source_hash));
@@ -67,6 +72,20 @@ MIGRATIONS = [
     ("functions", "rom_offset", "INTEGER"),                    # ROM projects: where its bytes are in the ROM
     ("functions", "meta", "TEXT"),                             # forks: symbol, demangled name, source file
     ("functions", "boost", "INTEGER NOT NULL DEFAULT 0"),      # claim order: >0 matching it matches that many twins
+    # who made an attempt, to compare setups: the agent's kind (claude, codex, api, own...), model and effort, and
+    # how far its function was then (scoring.stage), so setups are compared on like work
+    ("attempts", "kind", "TEXT"),
+    ("attempts", "model", "TEXT"),
+    ("attempts", "effort", "TEXT"),
+    ("attempts", "stage", "TEXT"),
+    # a helper pinned to one function: how it asked (1 or several versions per call, or an agent's own loop), and
+    # what the call cost in tokens (shared among the versions it gave), so methods are compared per token too
+    ("attempts", "method", "TEXT"),
+    ("attempts", "tokens", "INTEGER"),
+    # the permuter's turns on a function, and the best score they were spent at (a better best starts them over):
+    # kept, so a restart doesn't hand it the same near misses again
+    ("functions", "permuter_turns", "INTEGER NOT NULL DEFAULT 0"),
+    ("functions", "permuter_best", "INTEGER"),
 ]
 
 

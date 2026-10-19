@@ -198,3 +198,123 @@ def test_antigravity_helpers_say_when_it_isnt_connected(tmp_path, monkeypatch):
     s.runs = 1
     with pytest.raises(agents.Fatal, match="decomp connect antigravity"):
         m._run_cli(s, "tok", tmp_path)
+
+
+CODEX_CATALOG = {"models": [
+    {"slug": "gpt-b", "display_name": "GPT-B", "description": "second", "visibility": "list", "priority": 2,
+     "default_reasoning_level": "medium", "supported_reasoning_levels": [{"effort": "low"}, {"effort": "medium"}]},
+    {"slug": "gpt-hidden", "display_name": "Hidden", "visibility": "hide", "priority": 1},
+    {"slug": "gpt-a", "display_name": "GPT-A", "description": "first", "visibility": "list", "priority": 1,
+     "default_reasoning_level": "low", "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}]}]}
+
+
+def _fake_codex(tmp_path, catalog=CODEX_CATALOG, bundled=None):
+    """A `codex` whose `debug models` prints the catalog (`--bundled`: the other one, or a failure)."""
+    exe = tmp_path / "codex"
+    data = tmp_path / "catalog.json"
+    data.write_text(json.dumps(catalog))
+    bundled_data = tmp_path / "bundled.json"
+    bundled_data.write_text(json.dumps(bundled))
+    exe.write_text('#!/bin/sh\n[ "$1 $2" = "debug models" ] || exit 2\n'
+                   + (f'if [ "$3" = "--bundled" ]; then cat {bundled_data}; exit 0; fi\n' if bundled is not None else
+                      'if [ "$3" = "--bundled" ]; then exit 1; fi\n')
+                   + (f"cat {data}\n" if catalog is not None else "exit 1\n"))
+    exe.chmod(0o755)
+    return str(exe)
+
+
+def test_codex_models_are_the_ones_its_own_picker_lists(tmp_path, monkeypatch):
+    monkeypatch.setattr(agents, "_models", {})
+    got = agents.models("codex", _fake_codex(tmp_path))
+    assert [m["id"] for m in got] == ["gpt-a", "gpt-b"]  # hidden ones left out, best first
+    assert got[0] == {"id": "gpt-a", "name": "GPT-A", "note": "first", "efforts": ["low", "high"], "effort": "low"}
+    assert got[1]["efforts"] == ["low", "medium"] and got[1]["effort"] == "medium"
+
+
+def test_codex_models_fall_back_to_the_catalog_bundled_with_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(agents, "_models", {})
+    assert [m["id"] for m in agents.models("codex", _fake_codex(tmp_path, catalog=None, bundled=CODEX_CATALOG))] == ["gpt-a", "gpt-b"]
+    monkeypatch.setattr(agents, "_models", {})
+    assert agents.models("codex", _fake_codex(tmp_path, catalog=None)) == []  # nothing to offer: models can still be typed
+
+
+def test_codex_effort_is_passed_on_only_when_chosen(tmp_path, monkeypatch):
+    monkeypatch.setattr(agents, "_codex_config", lambda: {})
+    for effort, expected in (("high", ['model_reasoning_effort="high"']), ("", []), ('x"; rm -rf /', [])):
+        m = _manager(tmp_path, monkeypatch, "codex")
+        s = agents.Session("codex-1", "codex", "c", "demo", "codex-1", {"model": "gpt-a", "effort": effort})
+        work = tmp_path / f"cx-{len(effort)}"
+        work.mkdir()
+        cmd, _, _ = m._command(s, "tok", work)
+        assert [a for a in cmd if a.startswith("model_reasoning_effort")] == expected, effort
+        assert cmd[cmd.index("-m") + 1] == "gpt-a"
+
+
+def test_codex_default_effort_is_the_users_own_setting(monkeypatch):
+    monkeypatch.setattr(agents, "_codex_config", lambda: {"model": "gpt-a", "model_reasoning_effort": "xhigh"})
+    assert agents._config_effort("codex") == "xhigh" and agents._config_model("codex") == "gpt-a"
+    assert agents._config_effort("claude") is None
+    monkeypatch.setattr(agents, "_codex_config", lambda: {})
+    assert agents._config_effort("codex") is None
+
+
+def test_opencode_own_install_beats_a_stale_copy_on_path(tmp_path, monkeypatch):
+    def exe(p):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("#!/bin/sh\n")
+        p.chmod(0o755)
+        return str(p)
+    home, brew = tmp_path / "home", tmp_path / "brew"
+    home.mkdir()
+    monkeypatch.setattr(agents.Path, "home", lambda: home)
+    monkeypatch.setenv("PATH", str(brew))
+    on_path = exe(brew / "opencode")
+    assert agents._which("opencode") == on_path  # only the PATH copy: still found
+    own = exe(home / ".opencode" / "bin" / "opencode")
+    assert agents._which("opencode") == own
+
+
+def _opencode(tmp_path, name, run_help, version="1.18.2"):
+    exe = tmp_path / name
+    exe.write_text(f'#!/bin/sh\nif [ "$1" = "--version" ]; then echo {version}; exit 0; fi\n'
+                   f"if [ \"$1 $2\" = \"run --help\" ]; then cat <<'EOF'\n{run_help}\nEOF\nfi\n")
+    exe.chmod(0o755)
+    return str(exe)
+
+
+def test_opencode_log_level_is_spelled_the_way_that_opencode_accepts(tmp_path, monkeypatch):
+    """1.x lists DEBUG/INFO/WARN/ERROR and prints its help instead of running when given "error"; 2.x refuses "ERROR"."""
+    monkeypatch.setattr(agents, "_log_levels", {})
+    upper = '      --log-level    log level    [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]'
+    lower = '      --log-level    log level    [string] [choices: "debug", "info", "warn", "error"]'
+    assert agents.opencode_error_level(_opencode(tmp_path, "oc1", upper)) == "ERROR"
+    assert agents.opencode_error_level(_opencode(tmp_path, "oc2", lower, "2.0.3")) == "error"
+    assert agents.opencode_error_level(_opencode(tmp_path, "oc3", "usage: opencode run", "2.1.0")) == "error"  # by version
+    assert agents.opencode_error_level(_opencode(tmp_path, "oc4", "usage: opencode run", "1.18.2")) == "ERROR"
+    assert agents.opencode_error_level(str(tmp_path / "missing")) == "ERROR"  # can't ask: the long-standing spelling
+    m = _manager(tmp_path, monkeypatch, "opencode")
+    monkeypatch.setattr(agents, "opencode_error_level", lambda exe: "error")
+    s = agents.Session("opencode-1", "opencode", "o", "demo", "opencode-1", {})
+    (tmp_path / "oc-work").mkdir()
+    cmd, _, _ = m._command(s, "tok", tmp_path / "oc-work")
+    assert cmd[cmd.index("--log-level") + 1] == "error"
+
+
+def test_stopping_a_helper_gives_its_function_back_at_once(tmp_path):
+    """An API helper waiting on its model kept its claim until the reply came, and showed as a connected agent."""
+    from decompnet.app.engine import RomNetwork
+
+    net = RomNetwork(tmp_path / "d.db", tmp_path)
+    with net.store.tx() as db:
+        db.execute("INSERT INTO projects(id, slug, name, root, config) VALUES(1,'game','game',?,?)",
+                   (str(tmp_path), json.dumps({"kind": "rom"})))
+        db.execute("INSERT INTO functions(project_id, name, size, n_insns) VALUES(1,'f',4,1)")
+    m = agents.Manager(net, tmp_path, "http://127.0.0.1:1/mcp")
+    agent, _ = net.local_agent("api-1")
+    net.claim_row(agent, "game", "f")
+    s = agents.Session("api-1", "api", "API #1", "game", "api-1", {})
+    s.agent_id, s.state = agent.id, "working"
+    m.sessions[s.id] = s
+    m.stop(s.id)
+    assert net.store.one("SELECT COUNT(*) AS n FROM claims")["n"] == 0
+    assert net._function("f", "game")["abandons"] == 0  # not the function's fault

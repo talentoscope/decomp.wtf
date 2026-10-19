@@ -89,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     up = sub.add_parser("upstream", help="commit matched functions to a git repo, one commit per match, with credit")
     up.add_argument("project")
     up.add_argument("repo", type=Path)
+    up.add_argument("--acknowledge-policy", action="store_true", help="confirm the displayed destination contribution rules were reviewed and followed")
 
     sub.add_parser("status", help="print progress and leaderboard")
 
@@ -148,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
             print(net.status())
         elif args.cmd == "upstream":
             from .upstream import export as upstream_export
-            upstream_export(net, args.project, args.repo)
+            upstream_export(net, args.project, args.repo, acknowledge_policy=args.acknowledge_policy)
         elif args.cmd == "export":
             n = net.export(args.project, args.out)
             print(f"exported {n} matched functions to {args.out}")

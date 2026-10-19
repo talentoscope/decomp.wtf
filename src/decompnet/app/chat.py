@@ -6,7 +6,6 @@ starts itself only get the work tools (a helper can't start more helpers)."""
 from __future__ import annotations
 
 import time
-from pathlib import Path
 
 import anyio
 from mcp.server.mcpserver import Context

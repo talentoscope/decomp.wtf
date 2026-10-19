@@ -2,7 +2,7 @@
 and restarts in place (same port, same browser session; helper agents carry on afterwards).
 
 Where updates come from depends on how decomp.wtf was installed (install.json, written by the installer):
-- "release": the version on decomp.wtf (its install.sh says which one), installed from the wheel there
+- "release": the latest published stable GitHub release, installed from its wheel or tagged source
 - "branch":  the newest commit of a branch on GitHub (for testing a branch before it's released), installed from
              GitHub's archive of that commit
 Installing is `uv tool install --force` of the new version, then its `decomp setup` (new pinned tools), then the
@@ -26,8 +26,8 @@ from pathlib import Path
 
 from .. import __version__, hostenv, toolchains
 
-REPO = "i12bp8/decomp.wtf"
-SITE = "https://decomp.wtf"
+REPO = "SynapticDreams/decomp.wtf"
+LEGACY_REPO = "i12bp8/decomp.wtf"  # migrate existing install metadata; never used as a download source
 RECHECK = {"release": 3 * 3600, "branch": 15 * 60}  # GitHub allows 60 unauthenticated API calls an hour
 
 
@@ -43,13 +43,19 @@ def installed() -> dict:
         data = {}
     if not isinstance(data, dict) or data.get("channel") not in ("release", "branch"):
         data = {"channel": "release"}
-    data.setdefault("repo", REPO)
+    data["repo"] = _repository(data.get("repo"))
     data["version"] = __version__
     return data
 
 
+def _repository(repo) -> str:
+    if not isinstance(repo, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        return REPO
+    return REPO if repo.lower() == LEGACY_REPO.lower() else repo
+
+
 def record(channel: str, branch: str = "", commit: str = "", repo: str = REPO) -> dict:
-    data = {"channel": channel if channel in ("release", "branch") else "release", "repo": repo or REPO,
+    data = {"channel": channel if channel in ("release", "branch") else "release", "repo": _repository(repo),
             "branch": branch, "commit": commit, "version": __version__, "t": time.time()}
     if data["channel"] == "release":
         data.update(branch="", commit="")
@@ -79,19 +85,29 @@ def _first_line(message: str) -> str:
 
 def _check_release(cur: dict) -> dict:
     try:
-        text, site = _get(f"{SITE}/install.sh").decode("utf-8", "replace"), True
-    except OSError:  # decomp.wtf can't be reached from here (a filter, an outage): the release on GitHub
-        text, site = _get(f"https://raw.githubusercontent.com/{cur['repo']}/main/site/public/install.sh").decode(
-            "utf-8", "replace"), False
-    m = re.search(r'^VERSION="([^"]+)"', text, re.M)
-    if not m:
-        raise ValueError("decomp.wtf didn't say which version is current")
+        release = _json(f"https://api.github.com/repos/{cur['repo']}/releases/latest")
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        return {"available": False, "latest": None, "notes": ["No stable releases have been published yet."],
+                "link": f"https://github.com/{cur['repo']}/releases", "spec": None}
+    if not isinstance(release, dict):
+        raise ValueError("GitHub did not return a release object")
+    m = re.fullmatch(r"v?(\d+\.\d+\.\d+)", release.get("tag_name") or "")
+    if not m or release.get("draft") or release.get("prerelease"):
+        raise ValueError("the latest release must have a stable vMAJOR.MINOR.PATCH tag")
     latest = m.group(1)
     newer = version_key(latest) > version_key(cur["version"])
-    spec = (f"decompnet @ {SITE}/dl/decompnet-{latest}-py3-none-any.whl" if site else
-            f"decompnet @ https://github.com/{cur['repo']}/archive/refs/tags/v{latest}.tar.gz")
-    return {"available": newer, "latest": {"version": latest, "commit": "", "date": None},
-            "notes": [], "link": f"https://github.com/{cur['repo']}/commits/main", "spec": spec}
+    tag = release["tag_name"]
+    link = f"https://github.com/{cur['repo']}/releases/tag/{tag}"
+    wheel = f"decompnet-{latest}-py3-none-any.whl"
+    url = (f"https://github.com/{cur['repo']}/releases/download/{tag}/{wheel}"
+           if any(a.get("name") == wheel for a in release.get("assets") or []) else
+           f"https://github.com/{cur['repo']}/archive/refs/tags/{tag}.tar.gz")
+    notes = [line.strip() for line in (release.get("body") or "").splitlines() if line.strip()][:12]
+    return {"available": newer,
+            "latest": {"version": latest, "commit": "", "date": release.get("published_at")},
+            "notes": notes, "link": link, "spec": f"decompnet @ {url}"}
 
 
 def _branch_version(repo: str, sha: str) -> str:
@@ -127,7 +143,7 @@ def _check_branch(cur: dict) -> dict:
 
 
 def check() -> dict:
-    """What's installed, what's newest, and whether that's an update (network: GitHub or decomp.wtf)."""
+    """What's installed, what's newest, and whether that's an update (network: GitHub)."""
     cur = installed()
     out = {"current": cur, "available": False, "latest": None, "notes": [], "link": None, "error": None,
            "checked": time.time(), "can_apply": can_apply()[0], "why_not": can_apply()[1]}
@@ -151,7 +167,7 @@ def uv() -> str | None:
 def can_apply() -> tuple[bool, str]:
     if sys.platform == "win32":
         return False, ("decomp.wtf now runs in WSL 2 on Windows: run the installer again in PowerShell "
-                       "(irm https://decomp.wtf/install.ps1 | iex) to switch to it")
+                       f"(irm https://github.com/{REPO}/releases/latest/download/install.ps1 | iex) to switch to it")
     if not uv():
         return False, "uv isn't installed here, so decomp.wtf can't update itself: run the installer again"
     return True, ""
