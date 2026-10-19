@@ -1117,8 +1117,8 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
                 proj = net.project_row(slug)
             except NetworkError as e:
                 return fail(e)
-            if (proj["arch"] or "") != "sm83" or net.fork_slug(slug):
-                return fail(ValueError("the assembly track is for Game Boy projects"))
+            if (proj["arch"] or "") not in ("sm83", "z80", "mos6502") or net.fork_slug(slug):
+                return fail(ValueError("the assembly track is for Game Boy, Master System, Game Gear and NES projects"))
             if not agents.Manager._asm_left(net, proj):
                 return fail(ValueError("Nothing to start on: every hand-written routine is documented or being worked on."))
             options["track"] = "asm"
