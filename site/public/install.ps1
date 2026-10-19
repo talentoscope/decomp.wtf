@@ -1,6 +1,6 @@
 # decomp.wtf installer for Windows (PowerShell).
 #
-#   irm https://decomp.wtf/install.ps1 | iex
+#   irm https://github.com/SynapticDreams/decomp.wtf/releases/latest/download/install.ps1 | iex
 #
 # decomp.wtf is a Linux program (the old compilers it runs are), so on Windows it gets its own small Linux: a WSL 2
 # distribution called decomp-wtf, the same Linux as its Docker image for servers. What this does, and nothing else:
@@ -12,7 +12,7 @@
 # Your projects live in it: \\wsl.localhost\decomp-wtf\home\decomp\Decomp. Nothing is sent to decomp.wtf.
 # Uninstall: decomp uninstall
 #
-# Testing a branch:  $env:DECOMP_BRANCH = "<name>"; irm https://raw.githubusercontent.com/i12bp8/decomp.wtf/<name>/site/public/install.ps1 | iex
+# Testing a branch:  $env:DECOMP_BRANCH = "<name>"; irm https://raw.githubusercontent.com/SynapticDreams/decomp.wtf/<name>/site/public/install.ps1 | iex
 # From a checkout:   powershell -ExecutionPolicy Bypass -File site\public\install.ps1   (installs that checkout)
 
 # Everything runs in its own block: `irm | iex` runs a script in your PowerShell session, and its settings shouldn't
@@ -21,8 +21,8 @@
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"  # Windows PowerShell downloads many times slower while drawing a progress bar
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$Version = "0.10.6"
-$Repo = "i12bp8/decomp.wtf"
+$Version = "0.10.7"
+$Repo = "SynapticDreams/decomp.wtf"
 $Distro = "decomp-wtf"
 $Wsl = Join-Path $env:SystemRoot "System32\wsl.exe"
 # Say who's downloading. salsa.debian.org (Debian's WSL image) answers browser-like agents, as Windows PowerShell's
@@ -69,7 +69,7 @@ if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64" -and $env:PROCESSOR_ARCHITEW6432 -ne
 
 # ---------------------------------------------------------------------------- where decomp.wtf comes from
 # Run from a checkout (site\public\install.ps1 in the repository): that checkout. Else $env:DECOMP_SOURCE,
-# $env:DECOMP_BRANCH (a branch on GitHub), or the release on decomp.wtf.
+# $env:DECOMP_BRANCH (a branch on GitHub), or the published GitHub release.
 $checkout = $null
 if ($PSScriptRoot) {
     $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
@@ -78,7 +78,7 @@ if ($PSScriptRoot) {
 }
 $source = if ($env:DECOMP_SOURCE) { $env:DECOMP_SOURCE } elseif ($env:DECOMP_BRANCH) { "branch:$($env:DECOMP_BRANCH)" } elseif ($checkout) { $checkout } else { "release" }
 $linuxSource = if ($source -eq "release" -or $source.StartsWith("branch:")) { $source } else { To-Wsl $source }
-$web = if ($source.StartsWith("branch:")) { "https://raw.githubusercontent.com/$Repo/$($source.Substring(7))/site/public" } else { "https://decomp.wtf" }
+$web = if ($source.StartsWith("branch:")) { "https://raw.githubusercontent.com/$Repo/$($source.Substring(7))/site/public" } else { "https://github.com/$Repo/releases/download/v$Version" }
 
 # the Linux side's scripts, next to this one in a checkout or from the same place as this one
 $tmp = Join-Path $env:TEMP ("decomp-wtf-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
@@ -88,14 +88,7 @@ foreach ($f in @("linux-base.sh", "install.sh", "decomp.ico")) {
     $dest = Join-Path $tmp $f
     if ($local -and (Test-Path $local)) { Copy-Item $local $dest }
     else {
-        try { Invoke-WebRequest -UseBasicParsing -UserAgent $UA -Uri "$web/$f" -OutFile $dest }
-        catch {
-            if ($web -ne "https://decomp.wtf") { throw }
-            # decomp.wtf can't be reached from here (a filter, an outage): the same files from GitHub
-            $web = "https://raw.githubusercontent.com/$Repo/main/site/public"
-            Step "decomp.wtf can't be reached from here: using GitHub instead"
-            Invoke-WebRequest -UseBasicParsing -UserAgent $UA -Uri "$web/$f" -OutFile $dest
-        }
+        Invoke-WebRequest -UseBasicParsing -UserAgent $UA -Uri "$web/$f" -OutFile $dest
     }
     if ($f.EndsWith(".sh")) { Save-Lf ([IO.File]::ReadAllText($dest)) $dest }
 }

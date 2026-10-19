@@ -97,10 +97,9 @@ def toolchain_dirs() -> list[Path]:
 def toolchain_bin(name: str) -> Path | None:
     """A binary inside the installed GBDK toolchain, or None when the toolchain isn't installed."""
     for d in toolchain_dirs():
-        for filename in (name, f"{name}.exe"):
-            exe = d / "bin" / filename
-            if exe.exists():
-                return exe
+        exe = d / "bin" / name
+        if exe.exists():
+            return exe
     return None
 
 

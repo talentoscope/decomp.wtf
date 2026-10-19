@@ -79,10 +79,9 @@ def _tool(tid: str, name: str) -> Path | None:
             continue
         for cand in [root] + sorted(p for p in root.iterdir() if p.is_dir()):
             for sub in (cand / "bin", cand):
-                for filename in (name, f"{name}.exe"):
-                    exe = sub / filename
-                    if exe.exists():
-                        return exe
+                exe = sub / name
+                if exe.exists():
+                    return exe
     return None
 
 
@@ -368,7 +367,7 @@ def split(rom_path: Path, workdir: Path, log=lambda *_: None, hints: dict | None
                 fns.append(gb.GbFunction(name=name, vram=addr, rom=flat, bank=bank, code=code,
                                          n_insns=sum(1 for _ in sm83.disassemble(code, addr)),
                                          asm=asm_blocks.get(name, ""),
-                                         refs=gb.refs_of(code, addr, bank, len(data), flat_start=flat),
+                                         refs=gb.refs_of(code, addr, bank, len(data)),
                                          edges={site - flat: to for site, to in edges.items()
                                                 if flat <= site < flat + len(code)}))
         meta = {"faithful": faithful, "labels": len(symbols), "functions": len(fns),

@@ -109,7 +109,7 @@ class Jobs:
                 job["result"] = fn(log)
                 job["state"] = "done"
                 logger.info("job %s %s done in %.0fs", kind, jid, time.time() - job["t"])
-            except BaseException as e:  # noqa: BLE001: a job must end, whatever went wrong
+            except BaseException as e:  # noqa: BLE001 (a job must end, whatever went wrong)
                 if getattr(e, "details", None):  # what the tool said, in full
                     job["trace"] = str(e.details)[-6000:]
                 elif not isinstance(e, (NetworkError, RomError, ValueError)):
@@ -124,22 +124,36 @@ class Jobs:
 
 
 class Settings:
+    _saving = threading.Lock()
+
     def __init__(self, path: Path):
         self.path = path
         try:
             self.data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except OSError:
+            self.data = {}
+        except ValueError:  # garbled: kept aside, not overwritten by the next save (it has the endpoints and keys)
+            self.data = {}
+            try:
+                path.replace(path.with_name(f"{path.name}.broken-{int(time.time())}"))
+            except OSError:
+                pass
+        if not isinstance(self.data, dict):
             self.data = {}
         if not isinstance(self.data.get("endpoints"), list):  # one saved "api" before 0.10.1: the first endpoint
             old = self.data.get("api") if isinstance(self.data.get("api"), dict) else {}
             self.data["endpoints"] = [agents.endpoint_entry(old | {"id": "e1"})] if old.get("base_url") or old.get("provider") else []
 
     def save(self) -> None:
-        self.path.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
-        try:
-            os.chmod(self.path, 0o600)
-        except OSError:
-            pass
+        """Whole or not at all: written next to the file and moved over it, one save at a time. Two saves at once could
+        leave it garbled, and a garbled file read back as no settings (endpoints, budget, helpers to resume)."""
+        with self._saving:
+            text = json.dumps(self.data, indent=2)
+            tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # (it holds API keys)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+            os.replace(tmp, self.path)
 
     # -- API endpoints: OpenAI-compatible servers for the built-in agent, each with its own address, model and key
 
@@ -199,7 +213,8 @@ class Settings:
                 "per_session": self.data.get("per_session", agents.PER_SESSION), "last_project": self.data.get("last_project"),
                 "autopilot": self.data.get("autopilot", True), "budget_usd": self.data.get("budget_usd") or 0,
                 "auto_update": bool(self.data.get("auto_update")), "check_updates": self.data.get("check_updates", True) is not False,
-                "launcher": _launcher(self.data.get("launcher") or {}), "recent_models": self.data.get("recent_models") or {}}
+                "launcher": _launcher(self.data.get("launcher") or {}), "recent_models": self.data.get("recent_models") or {},
+                "pin_helper": self.data.get("pin_helper") or {}}
 
 
 def _session_options(entry: dict) -> dict:
@@ -207,6 +222,59 @@ def _session_options(entry: dict) -> dict:
     out = {"endpoint": entry.get("id") or "", "provider": entry["provider"], "base_url": entry["base_url"],
            "model": entry["model"], "provider_name": entry["name"]}
     return out | {k: entry[k] for k in ("api_key", "context_tokens") if entry.get(k)}
+
+
+def _lean_options(net, kind: str, slug: str, given: dict) -> dict:
+    """A start's options for helpers that work the lean way (see lean.py) on the functions they claim: the method,
+    and how many versions per call."""
+    from . import lean
+
+    if kind not in agents.LEAN_KINDS:
+        raise ValueError("the lean loop is for API helpers and Codex")
+    if net.fork_slug(slug) or slug in net.links:
+        raise ValueError("the lean loop works on your own ROM projects (not a git project or a room's copy) for now")
+    method = str(given.get("lean"))
+    if method not in lean.METHODS:
+        raise ValueError(f"lean must be one of {', '.join(lean.METHODS)}")
+    out = {"lean": method, "variants": max(2, min(int(given.get("variants") or lean.VARIANTS), 6))}
+    if given.get("stall"):
+        out["stall"] = max(2, min(int(given["stall"]), 50))
+    return out
+
+
+def _pin_options(net, settings: Settings, kind: str, slug: str, given: dict) -> dict:
+    """A start's options for a helper pinned to one function: which function, and for an API helper the lean loop's
+    method (one version per call, several, or both in turn), its stop rule, the permuter between calls, and the
+    endpoint to switch to when stuck."""
+    from . import lean
+
+    if net.fork_slug(slug) or slug in net.links:
+        raise ValueError("pinning a helper to one function works on your own ROM projects (not a git project or a "
+                         "room's copy) for now")
+    fn = net._function(str(given["pin"]), slug)
+    if fn["status"] != "open":
+        raise ValueError(f"{fn['name']} isn't open ({fn['status']}): nothing to work on")
+    if net._hash_only(fn):
+        raise ValueError("this project keeps fingerprints only: there's no diff to get closer by")
+    held = net.store.one("SELECT a.name FROM claims c JOIN agents a ON a.id=c.agent_id WHERE c.function_id=?", fn["id"])
+    if held is not None and held["name"] not in ("permuter", "autopilot"):
+        raise ValueError(f"{fn['name']} is being worked on by {held['name']}: stop that helper first")
+    out = {"pin": fn["name"], "stall": max(2, min(int(given.get("stall") or 0) or
+                                                  (lean.STALL if given.get("lean") else agents.PIN_STALL_RUNS), 50)),
+           "polish": given.get("polish") is not False}
+    method = str(given.get("lean") or "")
+    if method:
+        if kind not in agents.LEAN_KINDS:
+            raise ValueError("the lean loop is for API helpers and Codex")
+        if method not in lean.METHODS:
+            raise ValueError(f"lean must be one of {', '.join(lean.METHODS)}")
+        out |= {"lean": method, "variants": max(2, min(int(given.get("variants") or lean.VARIANTS), 6))}
+        if given.get("escalate") and kind == "api":
+            stronger = settings.endpoint(str(given["escalate"]))
+            if stronger is None:
+                raise ValueError("the endpoint to switch to isn't saved any more")
+            out |= {"escalate_endpoint": stronger["id"], "escalate": _session_options(stronger)}
+    return out
 
 
 def _spread(settings: Settings, manager, picked: list[str], count: int, given: dict) -> list[tuple[dict, int]]:
@@ -286,7 +354,9 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
     net.release_local_claims()  # left behind if the app was killed
     threading.Thread(target=net.resume_autopilots, daemon=True, name="autopilot-resume").start()
 
-    # helpers that were working when the app last stopped carry on
+    # what a crash left running is stopped first; then helpers that were working when the app last stopped carry on
+    for name in manager.stop_strays():
+        logging.getLogger("decomp.wtf").info("stopped %s, a helper the last run left running", name)
     resume = [r for r in settings.data.get("running_agents", []) if isinstance(r, dict)]
     for r in resume:
         try:
@@ -299,6 +369,8 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
                     continue  # its endpoint was removed since
                 if saved is not None:  # as the endpoint is now, with its key
                     options.update(_session_options(saved))
+                if options.get("escalate_endpoint") and (stronger := settings.endpoint(str(options["escalate_endpoint"]))):
+                    options["escalate"] = _session_options(stronger)
             manager.start(r["kind"], r["slug"], 1, options)
         except (NetworkError, ValueError, KeyError):
             continue
@@ -428,7 +500,8 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         out = []
         for slug, ov, why in overviews():
             out.append({k: ov.get(k) for k in ("slug", "title", "kind", "origin", "platform", "platform_name", "ready",
-                                                "functions", "matched", "bytes", "matched_bytes", "last_activity")}
+                                                "functions", "matched", "bytes", "matched_bytes", "asm", "asm_bytes",
+                                                "last_activity")}
                        | {"working": running.get(slug, 0), "room": (ov.get("room") or {}).get("role"),
                           "autopilot": (ov.get("autopilot") or {}).get("state")} | ({"broken": why} if why else {}))
         return out
@@ -441,6 +514,22 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
     async def api_state(request: Request) -> Response:
         return guard(request) or JSONResponse(await call(state))
 
+    @mcp.custom_route("/api/coverage", methods=["POST"])
+    async def api_coverage(request: Request) -> Response:
+        """Coverage the user recorded with an emulator (a code/data log or an execution trace), uploaded as is."""
+        if (bad := guard(request, write=True)):
+            return bad
+        q = request.query_params
+        raw = b""
+        async for chunk in request.stream():
+            raw += chunk
+            if len(raw) > 64 << 20:
+                return fail(ValueError("that file is over 64 MB: a code/data log is the size of the game"))
+        try:
+            return JSONResponse(await call(lambda: net.import_coverage(q.get("slug", ""), raw, q.get("name", ""))))
+        except (NetworkError, ValueError, OSError) as e:
+            return fail(e)
+
     @mcp.custom_route("/api/import", methods=["POST"])
     async def api_import(request: Request) -> Response:
         """A game the user owns: the demo, an upload streamed to disk (discs are gigabytes), or a local path."""
@@ -448,6 +537,10 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
             return bad
         q = request.query_params
         toolchain = q.get("toolchain") or None
+        try:
+            cue_track = int(q["cue_track"]) if q.get("cue_track") else None
+        except ValueError:
+            return fail(ValueError("cue_track must be a track number"))
         if q.get("demo") == "1":
             game: bytes | Path | None = _static("demo/demo-quest-64.z64")
             if game is None:
@@ -482,7 +575,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
 
         def work(log):
             try:
-                slug = net.import_rom(game, toolchain=toolchain, confirmed=True, name=name, log=log)
+                slug = net.import_rom(game, toolchain=toolchain, confirmed=True, name=name, log=log, cue_track=cue_track)
             finally:
                 if uploaded:
                     shutil.rmtree(game.parent, ignore_errors=True)
@@ -492,7 +585,9 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
             return {"slug": slug}
         return JSONResponse({"job": jobs.start("import", work)})
 
-    MAP_KEYS = ("name", "vram", "size", "insns", "unit", "status", "best", "attempts", "agent", "matched_at", "matched_by", "ignored")
+    MAP_KEYS = ("name", "vram", "size", "insns", "unit", "status", "best", "attempts", "agent", "matched_at", "matched_by",
+                "why", "review", "review_by",  # (why a function is set aside, and whether an agent set it aside for review)
+                "track", "sample")  # (the assembly track: a routine to document; a documented one to look over)
 
     @mcp.custom_route("/api/map", methods=["GET"])
     async def api_map(request: Request) -> Response:
@@ -570,17 +665,80 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         except ValueError:
             since = {}
         out["sessions"] = [s for s in manager.snapshot(since) if s["slug"] == slug]
+        for s in out["sessions"]:
+            s.update(net.session_counts(slug, s["agent"], s["started_at"]))
         return out
 
     def p_compiler(slug, request, data):
-        net.set_compiler(slug, str(data.get("toolchain", "")), data.get("flags") or None)
+        if data.get("unit"):
+            net.set_unit_compiler(slug, str(data["unit"]), data.get("toolchain"), data.get("flags"), data.get("aspsx"))
+        else:
+            net.set_compiler(slug, str(data.get("toolchain", "")), data.get("flags"), data.get("aspsx"))
         return net.overview(slug)
+
+    def p_compiler_probe(slug, request, data):
+        return {"job": jobs.start("compiler probe", lambda log: net.probe_compiler(
+            slug, str(data["unit"]) if data.get("unit") else None, bool(data.get("expanded")), log))}
+
+    def p_psyq(slug, request, data):
+        return {"job": jobs.start("PSY-Q libraries", lambda log: net.identify_psyq_libraries(
+            slug, data.get("files"), bool(data.get("apply")), log, str(data["unit"]) if data.get("unit") else None))}
+
+    def p_psx_debug(slug, request, data):
+        import base64
+
+        files = data.get("files", [])
+        if not isinstance(files, list) or len(files) > 64 or any(not isinstance(f, dict) or not isinstance(f.get("data"), str) for f in files):
+            raise NetworkError("provide at most 64 base64 debug files")
+        if sum(len(f["data"]) for f in files) > 90 << 20:
+            raise NetworkError("debug upload exceeds 64 MiB")
+        try:
+            decoded = [(str(f.get("name", "")), base64.b64decode(f["data"], validate=True)) for f in files]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise NetworkError("invalid base64 debug upload") from exc
+        return {"job": jobs.start("PS1 debug information", lambda log: net.import_psx_debug(
+            slug, decoded, bool(data.get("apply")), str(data["unit"]) if data.get("unit") else None))}
+
+    def p_gcc_diagnostics(slug, request, data):
+        return {"job": jobs.start("compiler diagnostics", lambda log: net.explain_difference(
+            slug, data.get("function", ""), data.get("left"), data.get("right")))}
+
+    def p_disc_export(slug, request, data):
+        if not isinstance(data.get("original"), str) or not data["original"].strip():
+            raise NetworkError("provide the original local BIN, IMG, ISO or CUE path")
+        if data.get("image") is not None and not isinstance(data["image"], str):
+            raise NetworkError("image must be a local flat-build path")
+        return {"job": jobs.start("disc export", lambda log: net.export_disc(
+            slug, Path(data["original"]).expanduser(), Path(data["image"]).expanduser() if data.get("image") else None, log))}
 
     def p_export(slug, request, data):
         def work(log):
-            res = net.export_rom(slug, log=log)
+            res = net.export_rom(slug, log=log, translation_units=data.get("translation_units"))
             return {k: v for k, v in res.items() if k != "log"} | {"log": res.get("log", "")[-1500:]}
         return {"job": jobs.start("export", work)}
+
+    def p_resplit(slug, request, data):
+        """Split a Game Boy, Master System or NES game again with this version's splitter, keeping the work done on
+        it (engine.resplit_banked): a preview by default, `apply` to do it, with the project's helpers stopped."""
+        apply = data.get("apply") is True
+        if apply:
+            if any(s.slug == slug and s.state in ("starting", "working", "waiting") and not s.stop.is_set()
+                   for s in manager.sessions.values()):
+                raise NetworkError("stop this project's helpers first: splitting again changes the functions they hold")
+            net.permuter.stop(slug)
+            net.stop_autopilot(slug)
+
+        def work(log):
+            return net.resplit_banked(slug, apply=apply, log=log)
+        return {"job": jobs.start("resplit", work)}
+
+    def p_sms_profile(slug, request, data):
+        if request.method == "GET":
+            return net.sms.inspect(slug)
+        if any(s.slug == slug and s.state in ("starting", "working", "waiting") and not s.stop.is_set()
+               for s in manager.sessions.values()):
+            raise NetworkError("stop this project's helpers before changing cartridge mapping")
+        return net.sms.configure(slug, data.get("mapper"), data.get("variant"), data.get("reason"))
 
     def p_open(slug, request, data):
         why = hostenv.open_folder(Path(net.project_row(slug)["root"]))
@@ -609,7 +767,11 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
     def p_try(slug, request, data):
         """You, editing a function in the GUI: judged like an agent's attempt (and credited to "you")."""
         agent, _ = net.local_agent("you")
-        res = net.attempt(agent, str(data.get("name", "")), str(data.get("source", "")), slug)
+        name, source = str(data.get("name", "")), str(data.get("source", ""))
+        if net._on_asm_track(name, slug):  # a hand-written routine: its documented assembly, judged
+            text = net.document_function(agent, slug, name, source)
+            return {"score": 0 if text.startswith("✅") else None, "matched": text.startswith("✅"), "text": text[-4000:]}
+        res = net.attempt(agent, name, source, slug)
         return {"score": res["score"], "matched": res["matched"], "text": res["text"][-4000:]}
 
     def p_release(slug, request, data):
@@ -655,22 +817,39 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         return {"message": net.add_note(agent, slug, text[:2000], str(data.get("function", "")) or None)}
 
     def p_autopilot(slug, request, data):
-        if data.get("action") == "stop":
+        if data.get("action") == "stop":  # the permuter too: the panel shows them as one, and Stop means both
             net.stop_autopilot(slug)
+            net.permuter.stop(slug)
         else:
             net.start_autopilot(slug)
         return net.overview(slug)
 
     routes = {
         "/api/project": (p_overview, ["GET"]),
+        "/api/sms/profile": (p_sms_profile, ["GET", "POST"]),
         "/api/live": (p_live, ["GET"]),
         "/api/function": (lambda s, r, d: net.function_detail(s, r.query_params.get("name", "")), ["GET"]),
         "/api/diff": (lambda s, r, d: net.function_diff(s, r.query_params.get("name", ""),
                                                         r.query_params.get("which", "latest")), ["GET"]),
-        "/api/compiler": (p_compiler, ["POST"]), "/api/export": (p_export, ["POST"]), "/api/open": (p_open, ["POST"]),
+        "/api/compiler": (p_compiler, ["POST"]), "/api/export": (p_export, ["POST"]), "/api/disc/export": (p_disc_export, ["POST"]), "/api/compiler/diagnostics": (p_gcc_diagnostics, ["POST"]), "/api/open": (p_open, ["POST"]),
+        "/api/compiler/probe": (p_compiler_probe, ["POST"]),
+        "/api/compiler/small-data": (lambda s, r, d: net.small_data_evidence(s), ["POST"]),
+        "/api/libraries/psyq": (p_psyq, ["POST"]),
+        "/api/debug/psx": (p_psx_debug, ["POST"]),
+        "/api/resplit": (p_resplit, ["POST"]),
+        "/api/give_back": (lambda s, r, d: net.give_to_agents(s, str(d.get("function", ""))), ["POST"]),
+        "/api/corrections": (lambda s, r, d: net.corrections(s), ["GET"]),
+        "/api/corrections/undo": (lambda s, r, d: net.undo_correction(s, int(d.get("id") or 0)), ["POST"]),
+        "/api/symbols/import": (lambda s, r, d: net.import_symbols(s, str(d.get("text", "")), str(d.get("name", ""))),
+                                ["POST"]),
+        "/api/symbols/remove": (lambda s, r, d: net.remove_symbol_file(s), ["POST"]),
+        "/api/coverage/remove": (lambda s, r, d: net.remove_coverage(s), ["POST"]),
+        "/api/documented/review": (lambda s, r, d: net.review_documented(s, str(d.get("function", "")), d.get("ok") is True,
+                                                                          str(d.get("note", ""))), ["POST"]),
         "/api/delete": (p_delete, ["POST"]), "/api/agents/manual": (p_manual, ["POST"]),
         "/api/try": (p_try, ["POST"]), "/api/release": (p_release, ["POST"]),
         "/api/autopilot": (p_autopilot, ["POST"]), "/api/instructions": (p_instructions, ["POST"]),
+        "/api/claims/clear": (lambda s, r, d: {"cleared": net.clear_claims(s)}, ["POST"]),
         "/api/priority": (p_priority, ["POST"]), "/api/unlock": (p_unlock, ["POST"]), "/api/note": (p_note, ["POST"]),
         "/api/unlock-all": (p_unlock_all, ["POST"]), "/api/reset-progress": (p_reset_progress, ["POST"]),
         "/api/stats": (lambda s, r, d: net.stats(s), ["GET"]),
@@ -679,6 +858,56 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         mcp.custom_route(path, methods=methods)(with_project(fn))
 
     # ------------------------------------------------------------------ forks of public decomps
+
+    @mcp.custom_route("/api/mapping", methods=["POST"])
+    async def api_mapping(request: Request) -> Response:
+        """Operator-only profile API. No worker tool can change its own matching targets."""
+        if (bad := guard(request, write=True)):
+            return bad
+        data = await body(request)
+        action, slug = data.get("action"), str(data.get("slug") or "")
+        try:
+            if action in ("pause", "profile"):
+                proj = net.project_row(slug)
+                if action == "profile":
+                    profile = net.cfg(proj).get("mapping", {}).get("profile")
+                    if profile is None:
+                        raise ValueError("this project has no mapping profile")
+                    return JSONResponse(profile)
+                for s in list(manager.sessions.values()):
+                    if s.slug == slug:
+                        manager.stop(s.id)
+                net.stop_autopilot(slug)
+                net.permuter.stop(slug)
+                if (job := net.twins.jobs.get(slug)) and job.state == "running":
+                    job.stop.set()
+                return JSONResponse({"stop_requested": True, "slug": slug})
+            if action == "discover":
+                from ..rom.overlay_discovery import discover
+
+                image = hostenv.local_path(str(data.get("image") or ""))
+                if not image.is_file():
+                    raise ValueError("image must name your own local disc image or binary")
+                return JSONResponse({"job": jobs.start("discover mapping candidates", lambda log: discover(image))})
+            if action not in ("create", "preview", "apply"):
+                raise ValueError("mapping action must be discover, create, preview, apply, pause or profile")
+            text = data.get("profile")
+            net.mapping._profile(text)  # schema errors are reported before starting a job
+            image = hostenv.local_path(str(data.get("image") or ""))
+            if not image.is_file():
+                raise ValueError("image must name your own local disc image or binary")
+
+            def work(log):
+                if action == "create":
+                    return net.mapping.create(image, text, confirmed=data.get("confirmed") is True, log=log)
+                if action == "apply" and any(s.slug == slug and s.state in ("starting", "working", "waiting")
+                                             for s in manager.sessions.values()):
+                    raise NetworkError("pause this project's workers before applying the mapping")
+                return net.mapping.rescan(slug, image, text, apply=action == "apply", log=log)
+
+            return JSONResponse({"job": jobs.start("mapping", work)})
+        except (NetworkError, ValueError, OSError) as e:
+            return fail(e)
 
     @mcp.custom_route("/api/catalog", methods=["GET"])
     async def api_catalog(request: Request) -> Response:
@@ -695,7 +924,8 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
             return bad
         data = await body(request)
         try:
-            return JSONResponse(await call(lambda: net.forks.policy(str(data.get("repo", "")))))
+            return JSONResponse(await call(lambda: net.forks.review_policy(str(data["slug"])) if data.get("slug")
+                                           else net.forks.policy(str(data.get("repo", "")))))
         except NetworkError as e:
             return fail(e)
 
@@ -868,9 +1098,44 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         data = await body(request)
         kind, slug = str(data.get("kind", "")), str(data.get("slug", ""))
         given = data.get("options") or {}
-        options = {k: v for k, v in given.items() if k in ("model", "per_session")}
+        options = {k: v for k, v in given.items() if k in ("model", "effort", "per_session")}
+        if given.get("only_starred") is True:  # ★ Next in line only: the helper ends when those are done
+            options["only_starred"] = True
+        focus = str(given.get("focus") or "default")
+        if focus != "default":  # Quick Wins / Close Calls: which functions the helpers take
+            if focus not in agents.FOCUSES:
+                return fail(ValueError(f"unknown focus {focus!r}"))
+            try:
+                left = net.strategy_left(slug, agents.FOCUSES[focus][0])
+            except NetworkError as e:
+                return fail(e)
+            if not left:
+                return fail(ValueError(f"Nothing to start on: {agents.FOCUSES[focus][1]}. Pick another focus."))
+            options["focus"] = focus
+        if given.get("track") == "asm":  # the assembly track: hand-written routines, documented
+            try:
+                proj = net.project_row(slug)
+            except NetworkError as e:
+                return fail(e)
+            if (proj["arch"] or "") != "sm83" or net.fork_slug(slug):
+                return fail(ValueError("the assembly track is for Game Boy projects"))
+            if not agents.Manager._asm_left(net, proj):
+                return fail(ValueError("Nothing to start on: every hand-written routine is documented or being worked on."))
+            options["track"] = "asm"
+            options.pop("focus", None)
         options.setdefault("per_session", settings.data.get("per_session", agents.PER_SESSION))
         count = max(1, min(int(data.get("count", 1)), 8))
+        if given.get("pin"):  # one helper, on one function, until it matches (the function drawer's "Work on this")
+            try:
+                options |= _pin_options(net, settings, kind, slug, given)
+            except (NetworkError, ValueError) as e:
+                return fail(e)
+            count = 1
+        elif given.get("lean"):  # helpers that work the lean way, on function after function
+            try:
+                options |= _lean_options(net, kind, slug, given)
+            except (NetworkError, ValueError) as e:
+                return fail(e)
         picked: list[str] = []
         try:
             net.project_row(slug)
@@ -884,10 +1149,22 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
             return fail(e)
         # remembered, so the next start is one click; models typed in come back as suggestions
         model = str(options.get("model") or "")
-        settings.data["launcher"] = {"kind": kind, "model": model, "count": count} | ({"endpoints": picked} if picked else {})
-        if model and kind != "api":
+        effort = str(options.get("effort") or "")
+        if model and kind != "api" and model != agents.TIERED:  # "tiered" is offered already, not a typed name
             recent = settings.data.setdefault("recent_models", {}).setdefault(kind, [])
             settings.data["recent_models"][kind] = [model] + [m for m in recent if m != model][:7]
+        if options.get("pin"):  # the drawer's "Work on this" remembers its own choices, not the launcher's
+            saved = settings.data.get("pin_helper") or {}
+            setups = dict(saved.get("setups") or {}) | ({kind: {"model": model, "effort": effort}} if kind != "api" else {})
+            settings.data["pin_helper"] = saved | {
+                "who": f"ep:{picked[0]}" if kind == "api" and picked else f"k:{kind}", "lean": options.get("lean") or "",
+                "variants": options.get("variants") or 0, "escalate": options.get("escalate_endpoint") or "",
+                "polish": bool(options.get("polish")), ("stall_calls" if options.get("lean") else "stall_runs"): options["stall"],
+                "setups": setups}  # each agent's model and effort: an API endpoint has its own model
+            settings.save()
+            return JSONResponse({"started": ids})
+        settings.data["launcher"] = ({"kind": kind, "model": model, "count": count} | ({"effort": effort} if effort else {})
+                                     | ({"endpoints": picked} if picked else {}) | ({"lean": options["lean"]} if options.get("lean") else {}))
         settings.save()
         return JSONResponse({"started": ids})
 
@@ -933,7 +1210,11 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         if (bad := guard(request, write=True)):
             return bad
         data = await body(request)
-        if data.get("remove"):
+        if data.get("remove") and data.get("slug") and not data.get("id"):  # every stopped helper card on one project
+            for s in list(manager.sessions.values()):
+                if s.slug == data["slug"] and s.state not in ("starting", "working", "waiting"):
+                    manager.remove(s.id)
+        elif data.get("remove"):
             manager.remove(str(data.get("id")))
         elif data.get("slug"):  # every helper on one project
             for s in list(manager.sessions.values()):
@@ -942,6 +1223,34 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         else:
             manager.stop(data.get("id") or None)
         return JSONResponse({"ok": True})
+
+    @mcp.custom_route("/api/agents/disconnect", methods=["POST"])
+    async def api_agents_disconnect(request: Request) -> Response:
+        """Cut off an outside agent ({name}), or every one on a project ({slug}): its claims go back to the others and
+        its tool calls are refused. The app's own helpers keep their Stop button."""
+        if (bad := guard(request, write=True)):
+            return bad
+        data = await body(request)
+        mine = {s.agent_name for s in list(manager.sessions.values())}
+        if data.get("slug"):
+            try:
+                gone = await call(net.disconnect_all, str(data["slug"]), mine)
+            except NetworkError as e:
+                return fail(e)
+            for name in gone:
+                if (row := net.store.one("SELECT id FROM agents WHERE name=?", name)) is not None:
+                    manager.assignments.pop(row["id"], None)
+            return JSONResponse({"ok": True, "disconnected": gone})
+        name = str(data.get("name") or "")
+        if any(s.agent_name == name and s.state in ("starting", "working", "waiting") for s in list(manager.sessions.values())):
+            return fail(ValueError(f"{name} is one of your helpers: stop it with its Stop button"))
+        try:
+            freed = await call(net.disconnect_agent, name)
+        except NetworkError as e:
+            return fail(e)
+        if (row := net.store.one("SELECT id FROM agents WHERE name=?", name)) is not None:
+            manager.assignments.pop(row["id"], None)
+        return JSONResponse({"ok": True, "released": freed})
 
     @mcp.custom_route("/api/settings", methods=["POST"])
     async def api_settings(request: Request) -> Response:
@@ -1026,6 +1335,13 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
 
     share = {"servers": {}, "tunnel": None, "links": {}}
 
+    def github_token() -> str | None:
+        """The host's GitHub token for the gists that say where rooms are (identity.py): connected in the Team tab, or
+        DECOMP_GITHUB_TOKEN on a server."""
+        return os.environ.get("DECOMP_GITHUB_TOKEN") or (settings.data.get("github") or {}).get("token")
+
+    keeper = collab.Keeper(net, share, log=lambda line: jobs.logger.info("rooms: %s", line), token=github_token)
+
     def collab_server(public_port: int | None = None) -> int:
         """The room server: on 127.0.0.1 behind a quick tunnel, or on every network interface at `public_port` for
         a room shared at an address the host controls (LAN, Tailscale, a server). Only the room's API is served
@@ -1044,7 +1360,8 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
                 port = sock.getsockname()[1]
-        server = uvicorn.Server(uvicorn.Config(collab.host_app(net, net.rooms), host=host, port=port, log_level="warning"))
+        server = uvicorn.Server(uvicorn.Config(collab.host_app(net, net.rooms, tunnel=not public_port), host=host, port=port,
+                                               log_level="warning"))
         threading.Thread(target=server.run, daemon=True, name=f"collab-{port}").start()
         for _ in range(100):
             if server.started:
@@ -1064,22 +1381,35 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
             if not re.match(r"^https?://[^/\s]+$", address):
                 raise NetworkError("the address teammates use, like http://192.168.1.20:6481 or https://decomp.example.org")
             collab_server(port or 6481)
-            code = room.open_invite(keep=keep, mode="address", address=address, port=port or 6481)
+            room.open_invite(keep=keep, mode="address", address=address, port=port or 6481)
             base = address
         else:
             local = collab_server()
-            code = room.open_invite(keep=keep, mode="tunnel")
-            if share["tunnel"] is None or share["tunnel"].proc is None or share["tunnel"].proc.poll() is not None:
-                log("opening a private tunnel to this computer (Cloudflare quick tunnel, no account needed)")
-                share["tunnel"] = collab.Tunnel(local)
-                share["tunnel"].start(log)
-            base = share["tunnel"].url
+            room.open_invite(keep=keep, mode="tunnel")
+            with keeper.lock:
+                if share["tunnel"] is None or not share["tunnel"].alive():
+                    log("opening a private tunnel to this computer (Cloudflare quick tunnel, no account needed)")
+                    share["tunnel"] = collab.Tunnel(local)
+                    share["tunnel"].start(log)
+                base = share["tunnel"].url
+        room.url = base
         net.rooms[slug] = room
-        link = f"{base}/join/{'open' if room.settings['visibility'] == 'public' else code}#room={slug}"
+        link = room.link(base)
         share["links"][slug] = link
+        keeper.wake.set()  # publish where it is (a findable room shared through the tunnel)
         return link
 
-    # rooms shared at an address of the host's own come back when the app starts, with the same invite
+    def keep_rooms() -> None:
+        while True:
+            keeper.wake.wait(30)
+            keeper.wake.clear()
+            try:
+                keeper.tick()
+            except Exception:  # keep keeping: the next tick tries again
+                jobs.logger.warning("rooms: the tunnel keeper failed", exc_info=True)
+
+    # rooms that were open come back when the app starts, with the same invite: at an address of the host's own,
+    # or through a new quick tunnel (the keeper opens it, then the rooms publish where they are now)
     for p in net.store.all("SELECT slug, config FROM projects"):
         c = json.loads(p["config"]).get("collab") or {}
         if c.get("open") and c.get("mode") == "address" and c.get("address"):
@@ -1087,6 +1417,16 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
                 open_room(p["slug"], "address", c["address"], int(c.get("port") or 6481), keep=True)
             except (NetworkError, OSError):
                 pass
+        elif c.get("open") and c.get("mode", "tunnel") == "tunnel" and p["slug"] not in net.links:
+            try:
+                collab_server()
+                room = collab.Room(net, p["slug"])
+                room.open_invite(keep=True, mode="tunnel")
+                net.rooms[p["slug"]] = room
+                keeper.wake.set()  # open its tunnel now, not at the keeper's next round
+            except (NetworkError, OSError):
+                pass
+    threading.Thread(target=keep_rooms, daemon=True, name="rooms").start()
 
     @mcp.custom_route("/api/collab", methods=["GET"])
     async def api_collab(request: Request) -> Response:
@@ -1100,8 +1440,14 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         room = net.rooms.get(slug)
         cfg = (json.loads(net.project_row(slug)["config"]).get("collab") or {}) if slug else {}
         return JSONResponse({"sharing": room is not None, "link": share["links"].get(slug), "room": info,
-                             "settings": room.settings if room else {"visibility": cfg.get("visibility", "private"),
-                                                                       "approve": bool(cfg.get("approve"))},
+                             "settings": room.settings if room else {
+                                 "visibility": cfg.get("visibility", "private"),
+                                 "approve": bool(cfg.get("approve", cfg.get("visibility") == "public")),
+                                 "limit": int(cfg.get("limit") or 0), "findable": bool(cfg.get("findable", True))},
+                             "published": room.published if room else None,
+                             "publish_error": room.publish_error if room else "",
+                             "github": (settings.data.get("github") or {}).get("login") or
+                                       ("(from DECOMP_GITHUB_TOKEN)" if os.environ.get("DECOMP_GITHUB_TOKEN") else None),
                              "pending": room.pending() if room else [],
                              "mode": cfg.get("mode", "tunnel"), "address": cfg.get("address", ""), "port": cfg.get("port", 6481),
                              "was_sharing": bool(cfg.get("open")) and room is None,
@@ -1122,7 +1468,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
 
         def work(log):
             room = net.rooms.get(slug) or collab.Room(net, slug)
-            room.configure(data.get("visibility"), data.get("approve"))
+            room.configure(data.get("visibility"), data.get("approve"), data.get("limit"), data.get("findable"))
             return {"link": open_room(slug, mode, str(data.get("address", "")), int(data.get("port") or 6481), log=log,
                                       keep=bool(data.get("keep")))}
         return JSONResponse({"job": jobs.start("share", work)})
@@ -1143,7 +1489,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
             elif action in ("approve", "decline"):
                 room.approve(name, action == "approve")
             elif action == "settings":
-                room.configure(data.get("visibility"), data.get("approve"))
+                room.configure(data.get("visibility"), data.get("approve"), data.get("limit"), data.get("findable"))
                 c = room.cfg.get("collab") or {}
                 share["links"][slug] = open_room(slug, c.get("mode", "tunnel"), c.get("address", ""),
                                                  int(c.get("port") or 6481), keep=True)
@@ -1221,7 +1567,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
 
         def work(log):
             try:
-                slug = collab.join_room(net, link, name, game or b"", log=log)
+                slug = collab.join_room(net, link, name, game or b"", log=log, trust=q.get("trust") == "1")
             finally:
                 if uploaded:
                     shutil.rmtree(game.parent, ignore_errors=True)
@@ -1238,6 +1584,107 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         slug, link = str(data.get("slug", "")), str(data.get("link", ""))
         return JSONResponse({"job": jobs.start("reconnect", lambda log: {"slug": collab.reconnect(net, slug, link, log=log)})})
 
+    rooms_list: dict = {"at": 0.0, "rooms": [], "error": ""}
+
+    def listed_rooms(fresh: bool = False) -> dict:
+        """The public room list (roomlist.py), read from GitHub at most every ten minutes, with what this computer
+        knows about each room: the game is here (its title, which the list never holds), it's joined, it's hosted."""
+        from . import forkroom, identity, roomlist
+
+        if fresh or time.time() - rooms_list["at"] > 600:
+            try:
+                rooms_list.update(rooms=roomlist.fetch(), error="")
+            except NetworkError as e:
+                rooms_list["error"] = str(e)
+            rooms_list["at"] = time.time()
+        games, joined, hosted = {}, {}, {}
+        for p in net.store.all("SELECT slug, name, config FROM projects"):
+            cfg = json.loads(p["config"])
+            if (sha1 := forkroom.project_identity(cfg)):
+                games.setdefault(sha1, (p["slug"], p["name"]))
+            if (key := (cfg.get("link") or {}).get("key")):
+                joined[key] = p["slug"]
+            if (secret := (cfg.get("collab") or {}).get("key")):
+                hosted[identity.public_key(secret)] = p["slug"]
+        rooms = [r | {"have": games.get(r["sha1"], (None, None))[0], "title": games.get(r["sha1"], (None, None))[1],
+                      "joined": joined.get(r["key"]), "hosted": hosted.get(r["key"])} for r in rooms_list["rooms"]]
+        return {"rooms": rooms, "error": rooms_list["error"], "at": rooms_list["at"], "repo": roomlist.ROOMS_REPO}
+
+    @mcp.custom_route("/api/rooms", methods=["GET"])
+    async def api_rooms(request: Request) -> Response:
+        if (bad := guard(request)):
+            return bad
+        return JSONResponse(await anyio.to_thread.run_sync(lambda: listed_rooms(request.query_params.get("fresh") == "1")))
+
+    @mcp.custom_route("/api/rooms/link", methods=["POST"])
+    async def api_rooms_link(request: Request) -> Response:
+        """A listed room's link, where it is now (from its host's gist, signed by the room)."""
+        from . import roomlist
+
+        if (bad := guard(request, write=True)):
+            return bad
+        key = str((await body(request)).get("key", ""))
+        entry = next((r for r in rooms_list["rooms"] if r["key"] == key), None)
+        if entry is None:
+            return fail(ValueError("that room isn't on the list any more"))
+        try:
+            return JSONResponse({"link": await anyio.to_thread.run_sync(roomlist.link, entry)})
+        except NetworkError as e:
+            return fail(e)
+
+    @mcp.custom_route("/api/collab/listing", methods=["POST"])
+    async def api_collab_listing(request: Request) -> Response:
+        """List (or unlist) a room this computer hosts: the signed listing, and the list's issue form filled in with
+        it, which the host submits on GitHub."""
+        from . import roomlist
+
+        if (bad := guard(request, write=True)):
+            return bad
+        data = await body(request)
+        room = net.rooms.get(str(data.get("slug", "")))
+        if room is None:
+            return fail(ValueError("share the room first"))
+        action = "unlist" if data.get("action") == "unlist" else "list"
+        try:
+            blob = await anyio.to_thread.run_sync(lambda: roomlist.listing(net, room, action, str(data.get("note", ""))))
+        except NetworkError as e:
+            return fail(e)
+        return JSONResponse({"listing": blob, "url": roomlist.issue_url(blob, action), "repo": roomlist.ROOMS_REPO})
+
+    @mcp.custom_route("/api/github", methods=["POST", "DELETE"])
+    async def api_github(request: Request) -> Response:
+        """Connect GitHub (a classic token with only the gist scope), so rooms shared through a quick tunnel can say
+        where they are now in a secret gist; or disconnect it."""
+        from . import identity
+
+        if (bad := guard(request, write=True)):
+            return bad
+        if request.method == "DELETE":
+            settings.data.pop("github", None)
+            settings.save()
+            return JSONResponse({"github": None})
+        token = str((await body(request)).get("token", "")).strip()
+        try:
+            login = await anyio.to_thread.run_sync(identity.github_login, token)
+        except ValueError as e:
+            return fail(e)
+        settings.data["github"] = {"token": token, "login": login}
+        settings.save()
+        keeper.wake.set()  # say where the rooms are now
+        return JSONResponse({"github": login})
+
+    @mcp.custom_route("/api/collab/follow", methods=["POST"])
+    async def api_collab_follow(request: Request) -> Response:
+        """A member follows the host's commits that change the project's build setup, having looked at them."""
+        if (bad := guard(request, write=True)):
+            return bad
+        data = await body(request)
+        slug, head = str(data.get("slug", "")), str(data.get("head", ""))
+        link = net.links.get(slug)
+        if link is None or not link.fork:
+            return fail(ValueError("this project doesn't follow a room's commits"))
+        return JSONResponse({"job": jobs.start("follow", lambda log: {"followed": link.follow_held(head)})})
+
     @mcp.custom_route("/api/collab/leave", methods=["POST"])
     async def api_collab_leave(request: Request) -> Response:
         if (bad := guard(request, write=True)):
@@ -1249,6 +1696,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         return JSONResponse({"ok": True})
 
     def shutdown_rooms() -> None:
+        keeper.stopped = True  # no new tunnel while the app quits (it would outlive the app)
         if share["tunnel"] is not None:
             share["tunnel"].stop()
         for link in list(net.links.values()):

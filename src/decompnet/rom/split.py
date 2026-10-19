@@ -294,10 +294,12 @@ def parse_data(path: Path) -> list[DataSymbol]:
     return [s for s in syms if s.vram]
 
 
-def _gp_from_entry(image: bytes, entry: int, segments: list[Segment]) -> int:
+def _gp_from_entry(image: bytes, entry: int, segments: list[Segment], strict: bool = False) -> int:
     """$gp as the program's start-up code sets it (`lui $gp, hi` + `addiu $gp, $gp, lo`)."""
     import rabbitizer
 
+    if strict:
+        return _gp_from_startup(image, entry, segments)
     seg = next((s for s in segments if s.contains(entry, 4)), None)
     if seg is None:
         return 0
@@ -314,6 +316,94 @@ def _gp_from_entry(image: bytes, entry: int, segments: list[Segment]) -> int:
         elif hi is not None and name == "ori" and ins.rt.value == 28 and ins.rs.value == 28:
             return hi | (word & 0xFFFF)
     return 0
+
+
+def _gp_from_startup(image: bytes, entry: int, segments: list[Segment]) -> int:
+    """A consistent constant GP at the startup's first calls/tail transfers, including branch delay slots.
+
+    Explore both sides of conditional branches and bounded initialization loops. Unknown GP writes, conflicting
+    paths and control flow beyond the search budget leave the value unresolved.
+    """
+    from ..handwritten import _mips_uses
+
+    segment = next((s for s in segments if s.contains(entry, 4)), None)
+    if segment is None:
+        return 0
+    stop = min(entry + 0x400, segment.vram + segment.rom_end - segment.rom_start)
+
+    def read(pc):
+        at = segment.rom_start + pc - segment.vram
+        return int.from_bytes(image[at:at + 4], "little") if entry <= pc < stop and at + 4 <= len(image) else None
+
+    completed = set()
+
+    def changed(word, gp):
+        op, rs, rt = word >> 26, (word >> 21) & 31, (word >> 16) & 31
+        if op == 15 and rt == 28:
+            return (word & 0xFFFF) << 16
+        if op in (9, 13) and rs == rt == 28 and gp is not None:
+            value = ((gp + ((word & 0xFFFF) ^ 0x8000) - 0x8000) & 0xFFFFFFFF) if op == 9 else gp | (word & 0xFFFF)
+            completed.add(value)
+            return value
+        if op == 0x10 and rs in (0, 2, 4, 6):
+            return None if rs in (0, 2) and rt == 28 else gp
+        uses = _mips_uses(word)
+        return None if uses is None or 28 in uses[1] else gp
+
+    pending, visited, exits = [(entry, None)], set(), set()
+    while pending:
+        pc, gp = pending.pop()
+        if (pc, gp) in visited:
+            continue
+        visited.add((pc, gp))
+        if len(visited) > 2048:
+            return 0
+        word = read(pc)
+        if word is None:
+            return 0
+        op, rs, rt, function = word >> 26, (word >> 21) & 31, (word >> 16) & 31, word & 63
+        branch = op in (1, 4, 5, 6, 7)
+        jump = op in (2, 3) or (op == 0 and function in (8, 9))
+        if (op in (0x14, 0x15, 0x16, 0x17) or (op == 0x10 and rs >= 16) or
+                (op in (0x11, 0x12) and rs == 8) or (op == 0 and function in (12, 13))):
+            return 0  # unsupported on this startup path, or an exception instead of a normal handoff
+        gp = changed(word, gp)
+        if not (branch or jump):
+            pending.append((pc + 4, gp))
+            continue
+        slot = read(pc + 4)
+        if slot is None:
+            return 0
+        from ..handwritten import _mips_branch
+
+        if _mips_branch(slot):
+            return 0
+        gp = changed(slot, gp)
+        if op == 3 or (op == 0 and function in (8, 9)):
+            exits.add(gp)
+            continue
+        if op == 1 and rt in (16, 17):
+            if rs != 0 or rt == 17:
+                exits.add(gp)
+            if rs != 0 or rt == 16:
+                pending.append((pc + 8, gp))
+            continue
+        if op == 2:
+            target = ((pc + 4) & 0xF0000000) | ((word & 0x3FFFFFF) << 2)
+            if entry <= target < stop:
+                pending.append((target, gp))
+            else:
+                exits.add(gp)
+            continue
+        target = pc + 4 + (((word & 0xFFFF) ^ 0x8000) - 0x8000) * 4
+        paths = [target] if op == 4 and rs == rt else [pc + 8] if op == 5 and rs == rt else [target, pc + 8]
+        for target in paths:
+            if entry <= target < stop:
+                pending.append((target, gp))
+            else:
+                exits.add(gp)
+    value = next(iter(exits)) if len(exits) == 1 and None not in exits else None
+    return value if value in completed else 0
 
 
 def _add_code_segments(config: Path, workdir: Path, image: str, log=print) -> str:
@@ -385,6 +475,7 @@ def _add_overlays(config: Path, workdir: Path, image: str, found: list[tuple[str
         data += code
         subs = [[start, "data", f"ovl_{name}_header"]] if code_at else []  # what comes before its code: a header
         segs.append({"name": f"ovl_{name}", "type": "code", "start": start, "vram": vram,
+                     "exclusive_ram_id": f"ovl_{name}",
                      "subsegments": subs + [[start + code_at, "c", f"ovl_{name}"]]})
     data += bytes(-len(data) % 0x10)
     segs.append([len(data)])
@@ -421,6 +512,15 @@ def split_rom(workdir: Path, rom_name: str = "rom.z64", log=print,
     config = configs[0]
     image = (yaml.safe_load(config.read_text(encoding="utf-8")).get("options") or {}).get("target_path") or rom_name
     compiler, platform, gp = _patch_config(config)
+    if platform == "psx" and not gp:
+        program = (workdir / rom_name).read_bytes()
+        recovered = _gp_from_entry((workdir / image).read_bytes(), int.from_bytes(program[0x10:0x14], "little"),
+                                   segments_from_config(config), strict=True)
+        if 0x80000000 <= recovered < 0x80200000:
+            gp = recovered
+            text = config.read_text(encoding="utf-8")
+            config.write_text(re.sub(r"(^\s*gp_value:\s*).*$", rf"\g<1>0x{gp:08X}", text, count=1, flags=re.M), encoding="utf-8")
+            log("recovered the small-data base from the entry code")
     big_endian = platform == "n64"
     if platform == "n64":
         image = _add_code_segments(config, workdir, image, log)

@@ -5,8 +5,8 @@
 # so decomp.wtf runs on the same Linux everywhere. Running it again updates the system and changes nothing else.
 #
 # What it does: installs the few system programs decomp.wtf and the agent CLIs use (git, Node.js for npm-installed
-# agents, the 32-bit C library for old compilers), makes the user "decomp" (uid 1000), and puts a `decomp` command
-# in /usr/local/bin that starts decomp.wtf from that user's install (install.sh puts it in ~/.local).
+# agents, the 32-bit C library for old compilers, a headless JDK 21 for Ghidra), makes the user "decomp" (uid 1000),
+# and puts a `decomp` command in /usr/local/bin that starts decomp.wtf from that user's install (install.sh puts it in ~/.local).
 set -eu
 
 MODE="${1:-docker}"
@@ -19,7 +19,7 @@ echo "> system packages"
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
   ca-certificates curl git xz-utils zstd unzip bzip2 file procps less nano bash python3 \
-  nodejs npm libc6-i386 lib32stdc++6 lib32z1 locales >/dev/null
+  nodejs npm libc6-i386 lib32stdc++6 lib32z1 locales openjdk-21-jdk-headless >/dev/null
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
@@ -87,11 +87,13 @@ cd "$HOME"
 export TMPDIR="$HOME/.tmp"
 rm -rf "$TMPDIR" && mkdir -p "$TMPDIR"
 marker="$HOME/.local/share/decompnet/container-install-id"
-if [ ! -x "$HOME/.local/bin/decomp" ] || [ "$(cat "$marker" 2>/dev/null)" != "${DECOMP_INSTALL_ID:-}" ]; then
+bundled_version="$(sed -n 's/^VERSION="\([^"]*\)"/\1/p' /usr/local/share/decomp-wtf/install.sh)"
+install_id="${DECOMP_INSTALL_ID:-$bundled_version}"
+if [ ! -x "$HOME/.local/bin/decomp" ] || [ "$(cat "$marker" 2>/dev/null)" != "$install_id" ]; then
   echo "decomp.wtf: installing (the first start takes a few minutes)"
   bash /usr/local/share/decomp-wtf/install.sh --no-start
   mkdir -p "$(dirname "$marker")"
-  printf '%s' "${DECOMP_INSTALL_ID:-}" > "$marker"
+  printf '%s' "$install_id" > "$marker"
 fi
 exec "$HOME/.local/bin/decomp" --no-browser
 EOF

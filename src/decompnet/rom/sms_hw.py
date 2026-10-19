@@ -7,7 +7,6 @@ calls them. A port that two names share (0x7F: the H counter when read, the PSG 
 status when read, its control port when written) has both.
 """
 
-# Portions ported from SynapticDreams; Copyright (c) 2026 Sam Wolfs; MIT License (see licenses/synaptic-sms-MIT.txt).
 from __future__ import annotations
 
 # port -> name; and the names that share a port with these

@@ -27,10 +27,16 @@ from io import BytesIO
 from pathlib import Path
 
 from ..elfobj import _MASKS, Reloc, mask_relocs
-from ..handwritten import mips_reason, ppc_reason
+from ..handwritten import mips_reason, mos6502_reason, ppc_reason, sm83_reason, sm83_routine, z80_reason
+from ..rom import nes, sms
+from ..rom.gb_mgbdis import MAX_FUNCTION
 from ..network import NetworkError
 
 log = logging.getLogger("decomp.wtf")
+# the 8-bit lanes, whose splits hand out pieces of routines and data too: why a function's code is none, and the
+# longest a function gets there (one that long: the split never found its end)
+PIECES = {"sm83": (sm83_reason, MAX_FUNCTION), "mos6502": (mos6502_reason, nes.MAX_FUNCTION),
+          "z80": (z80_reason, sms.MAX_FUNCTION)}
 IDENT = re.compile(r"^[A-Za-z_]\w*$")
 _MACHINE = {"EM_PPC": ("ppc", "big"), "EM_MIPS": ("mips", None), "EM_ARM": ("arm", "little")}
 _CACHE_VERSION = 2  # of twins.json: 2 added why code is hand-written assembly
@@ -120,18 +126,20 @@ def rom_print(fn, arch: str, big_endian: bool, label) -> Print:
                  [a for _, _, a in relocs])
 
 
-def rom_renames(syms, source: str, a: Print, b: Print, a_name: str, b_name: str) -> dict[str, str] | None:
+def rom_renames(syms, source: str, a: Print, b: Print, a_name: str, b_name: str,
+                destination=None) -> dict[str, str] | None:
     """renames() for a ROM project, where relocations are addresses: for each address a's code refers to, the
     name a's C writes for it (the nearest symbol at or below it that the C mentions: a struct whose field it is,
     an array whose element), and for b the same offset from b's address, by its name or its automatic one."""
     import bisect
 
     words = set(re.findall(r"\b[A-Za-z_]\w*\b", source))
+    destination = syms if destination is None else destination
     out: dict[str, str] = {}
     if a_name != b_name:
         out[a_name] = b_name
     for x, y in zip(a.addrs, b.addrs):
-        if x == y:
+        if x == y and destination is syms:
             continue
         i = bisect.bisect_right(syms._starts, x) - 1
         base = None
@@ -145,7 +153,7 @@ def rom_renames(syms, source: str, a: Print, b: Print, a_name: str, b_name: str)
         if base is None:
             continue  # the C doesn't name it (a literal, a string it defines): the judge compares the values
         to = y - (x - base.address)
-        other = syms.by_addr.get(to)
+        other = destination.by_addr.get(to)
         name = other.name if other is not None else f"D_{to:08X}"
         if out.setdefault(base.name, name) != name:
             return None
@@ -225,10 +233,11 @@ class Twins:
 
     def _rom_prints(self, proj) -> dict[int, Print]:
         cfg = self.net.cfg(proj)
-        syms = self.net.symbols(proj["id"])
         arch = "arm" if cfg.get("platform") == "gba" else proj["arch"] or "mips"
-        return {r["id"]: rom_print(r, arch, bool(cfg.get("big_endian", True)), syms.label) for r in self.net.store.all(
-            "SELECT id, target, relocs FROM functions WHERE project_id=? AND status!='asm'", proj["id"])}
+        rows = self.net.store.all("SELECT id, target, relocs, unit FROM functions WHERE project_id=? AND status!='asm'", proj["id"])
+        tables = {unit: self.net.symbols(proj["id"], unit) for unit in {r["unit"] for r in rows}}
+        return {r["id"]: rom_print(r, arch, bool(cfg.get("big_endian", True)),
+                                    tables[r["unit"]].label) for r in rows}
 
     def _fork_prints(self, proj) -> dict[int, Print]:
         from ..forks.project import ForkError, ForkProject, STATE
@@ -383,23 +392,79 @@ class Twins:
             chunk = found[at:at + 500]
             for r in self.net.store.all(f"SELECT * FROM functions WHERE id IN ({','.join('?' * len(chunk))}) "
                                         "AND status='open'", *chunk):
+                if json.loads(r["meta"] or "{}").get("for_agents"):
+                    continue  # a person gave it back to agents
                 self.net.forks.mark_asm(r, reason=prints[r["id"]].asm)
                 n += 1
         return n
 
     def _set_aside_rom_asm(self, proj) -> int:
-        """ROM projects on MIPS (N64, PlayStation, PlayStation 2): mips_reason on each open function's code."""
-        if (proj["arch"] or "mips") != "mips":
+        """ROM projects on MIPS (N64, PlayStation, PlayStation 2): mips_reason on each open function's code; on the
+        Game Boy's SM83, sm83_reason, and on the NES's 6502 and the Master System's Z80 their own (which also find
+        what the split took for a function: padding, data, pieces of routines)."""
+        arch = proj["arch"] or "mips"
+        if arch not in ("mips", *PIECES):
             return 0
-        platform, big = self.net.cfg(proj).get("platform", ""), bool(proj["big_endian"])
-        marks = []
-        for r in self.net.store.all("SELECT id, target, meta FROM functions WHERE project_id=? AND status='open'", proj["id"]):
-            if (why := mips_reason(r["target"] or b"", big, platform)):
+        cfg = self.net.cfg(proj)
+        platform, big = cfg.get("platform", ""), bool(proj["big_endian"])
+        bios_aside = 0
+        if platform == "psx":
+            from ..psx_gte import enabled
+
+            bios_aside = self.net.identify_psx_bios(proj["slug"])["set_aside"]
+
+            for r in self.net.store.all("SELECT * FROM functions WHERE project_id=? AND status='asm' "
+                                        "AND json_extract(meta,'$.asm_code') LIKE 'uses the GTE%'", proj["id"]):
+                meta = json.loads(r["meta"] or "{}")
+                if meta.get("review") or meta.get("kind") == "library" or not enabled(cfg, r["unit"]):
+                    continue
+                if mips_reason(r["target"] or b"", big, platform, allow_gte=True) is None:
+                    meta.pop("asm_code", None)
+                    with self.net.store.tx() as db:
+                        db.execute("UPDATE functions SET status='open', meta=? WHERE id=? AND status='asm'",
+                                   (json.dumps(meta), r["id"]))
+        marks, trims = [], []
+        for r in self.net.store.all("SELECT id, name, target, meta, vram, size, rom_offset, unit FROM functions "
+                                    "WHERE project_id=? AND status='open'", proj["id"]):
+            if json.loads(r["meta"] or "{}").get("for_agents"):
+                continue  # a person gave it back to agents: no rule takes it again
+            code = r["target"] or b""
+            if arch in PIECES:
+                reason, longest = PIECES[arch]
+                why = reason(code, r["vram"] or 0, capped=r["size"] >= longest)
+            else:
+                why = mips_reason(code, big, platform, allow_gte=platform == "psx" and enabled(cfg, r["unit"]))
+            if why and arch == "sm83" and (n := sm83_routine(code, r["vram"] or 0)):
+                trims.append((r, n))  # the routine at its start is one SDCC could write: the function is that
+            elif why:
                 marks.append((json.dumps({**json.loads(r["meta"] or "{}"), "asm_code": why}), r["id"]))
+        if trims:
+            self._trim_sm83(proj, cfg, trims)
         if marks:
             with self.net.store.tx() as db:
                 db.executemany("UPDATE functions SET status='asm', meta=? WHERE id=? AND status='open'", marks)
-        return len(marks)
+        return len(marks) + bios_aside
+
+    def _trim_sm83(self, proj, cfg: dict, trims: list) -> None:
+        """Game Boy functions the split ran on past their routine's end (into padding, data, or code with no entry
+        of its own) end there now: what's past it was never theirs, and no C writes it. Their best attempts were
+        against the longer bytes, so they start over."""
+        from ..rom import gb, sm83
+
+        limit = int((cfg.get("rom") or {}).get("size") or 0) or 1 << 23
+        with self.net.store.tx() as db:
+            for r, n in trims:
+                code, vram, bank = bytes(r["target"])[:n], r["vram"] or 0, (r["rom_offset"] or 0) // gb.BANK_SIZE
+                meta = {**json.loads(r["meta"] or "{}"), "trimmed_from": r["size"]}
+                db.execute("UPDATE functions SET target=?, size=?, n_insns=?, relocs=?, asm='', best_score=NULL, "
+                           "best_source=NULL, best_agent_id=NULL, meta=? WHERE id=? AND status='open'",
+                           (code, n, sum(1 for _ in sm83.disassemble(code, vram)),
+                            json.dumps([list(x) for x in gb.refs_of(code, vram, bank, limit)]), json.dumps(meta), r["id"]))
+                db.execute("UPDATE symbols SET size=? WHERE project_id=? AND name=?", (n, proj["id"], r["name"]))
+            self.net._event(db, proj["id"], None, "split", f"{len(trims)} functions end where their routine does now "
+                            "(the split had run them on into what follows)")
+        with self._lock:
+            self._prints.pop(proj["id"], None)
 
     def _full_running(self, slug: str) -> bool:
         return (job := self.jobs.get(slug)) is not None and job.state == "running"
@@ -409,6 +474,12 @@ class Twins:
         if (job := self.jobs.get(slug)) is not None and job.state == "running":
             return job
         if slug in self.net.links:  # a room member: the host's copy does this, and its matches come back here
+            proj = self.net.project_row(slug)
+            if proj["arch"] in PIECES and not self.net.fork_slug(slug):
+                # but a Game Boy (NES, Master System) function's end and what's set aside come from its bytes alone:
+                # the same here as on the host (every member's copy is the host's game), so this copy's functions end
+                # where its do
+                threading.Thread(target=self.set_aside_asm, args=(proj,), daemon=True, name=f"asm-{slug}").start()
             return None
         job = Job()
         with self._lock:
@@ -466,7 +537,10 @@ class Twins:
         source = a["matched_source"]
         if not source:
             return None
-        names = rom_renames(self.net.symbols(proj["id"]), source, pa, pb, a["name"], b["name"])
+        # The source and destination may be different overlays at the same address.
+        # rom_renames resolves the source's identifiers before mapping them to b's refs.
+        names = rom_renames(self.net.symbols(proj["id"], a["unit"]), source, pa, pb, a["name"], b["name"],
+                            destination=self.net.symbols(proj["id"], b["unit"]))
         if names is None:
             return None
         # what the header declares for a's names, declared for b's too (`extern Player g_player;` for D_80047000)
@@ -534,7 +608,8 @@ class Twins:
             log.info("twins: %s from %s not tried: %s", b["name"], a["name"], str(e)[:300])
             return "skip"
         if not source:
-            if self.net.fork_slug(proj["slug"]) and self.net.forks.is_asm(proj, a):
+            if self.net.fork_slug(proj["slug"]) and self.net.forks.is_asm(proj, a) \
+                    and not json.loads(b["meta"] or "{}").get("for_agents"):  # (unless a person gave it back)
                 self.net.forks.mark_asm(b, a["name"])
                 return "asm"
             return "skip"

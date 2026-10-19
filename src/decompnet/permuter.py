@@ -19,7 +19,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from . import scoring, toolchains
+from . import narrow_params, scoring, toolchains
 from .compiler import compile_source
 from .elfobj import FunctionObj, Reloc, extract_function
 from .project import compiler_config
@@ -151,6 +151,10 @@ class LocalScorer:
             if tc.proprietary:
                 raise toolchains.ToolchainError(f"{tc.id} is proprietary; install it yourself if you accept its license")
             toolchains.install(tc.id, log=log)
+        if job.get("aspsx"):
+            for dependency in ("maspsx", "binutils-mips"):
+                if toolchains.installed(dependency) is None:
+                    toolchains.install(dependency, log=log)
         self._tmp = tempfile.TemporaryDirectory(prefix="decompnet-worker-")
         inc = Path(self._tmp.name)
         for rel, text in job.get("include_files", {}).items():
@@ -161,16 +165,18 @@ class LocalScorer:
             dest.write_text(text, encoding="utf-8", newline="\n")
         # the coordinator's own way to run the toolchain (on Windows, Linux-only ones go through WSL)
         compiler = {"toolchain": tc.id, "include_dirs": [str(inc)]}
-        compiler.update({k: job[k] for k in ("cmd", "flags") if job.get(k)})
+        compiler.update({k: job[k] for k in ("cmd", "flags", "aspsx") if job.get(k) is not None})
         self.cc = compiler_config(inc, {"compiler": compiler})
         t = job["target"]
         self.target = FunctionObj(job["function"], t["arch"], t["big_endian"], base64.b64decode(t["code"]),
                                   [Reloc.from_json(r) for r in t["relocs"]])
         self.context, self.name = job["context"], job["function"]
+        self.last_candidate = None
 
     def score(self, source: str) -> int | None:
         res = compile_source(self.cc, self.context, source)
         cand = extract_function(res.obj, self.name) if res.ok else None
+        self.last_candidate = cand
         return scoring.diff(self.target, cand).score if cand else None
 
 
@@ -183,8 +189,10 @@ def search(job: dict, seconds: float, on_improvement, log=print, seed: int | Non
         log("  the coordinator's best source doesn't compile here; skipping")
         return job["best_score"], best_src
     deadline, tries = time.monotonic() + seconds, 0
+    pending = narrow_params.targeted(best_src, job["function"], job["toolchain"], scorer.target.code,
+                                     scorer.last_candidate.code) if scorer.last_candidate else []
     while time.monotonic() < deadline and best > 0:
-        cand = mutate(cur_src if rng.random() < 0.85 else best_src, rng)
+        cand = pending.pop(0) if pending else mutate(cur_src if rng.random() < 0.85 else best_src, rng)
         if cand is None:
             continue
         tries += 1

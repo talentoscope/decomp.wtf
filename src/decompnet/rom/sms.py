@@ -18,7 +18,6 @@ ROM every other bank at 0x4000) is what's left when nothing says otherwise. A fu
 the CPU address it runs at (`func_<bank>_<address>`), because two banks can hold code at the same address.
 """
 
-# Portions ported from SynapticDreams; Copyright (c) 2026 Sam Wolfs; MIT License (see licenses/synaptic-sms-MIT.txt).
 from __future__ import annotations
 
 import bisect
@@ -28,6 +27,8 @@ from pathlib import Path
 
 from . import gb, sms_trace, z80
 from .n64 import RomError
+from .sms_identity import strip_copier_header as strip_copier_header
+from .sms_mapping import BusState, Mapper, entry_state
 
 BANK_SIZE = 0x4000
 MAGIC = b"TMR SEGA"
@@ -41,13 +42,6 @@ PLATFORMS = {"sms": "Sega Master System", "gg": "Sega Game Gear"}
 #: Where the CPU starts looking: the reset vector, the RST handlers (0x38 is also the interrupt), and the NMI.
 VECTORS = tuple(range(0x00, 0x40, 0x08)) + (0x66,)
 MAX_FUNCTION = 0x800  # a function longer than this is more likely a run of code the sweep never ended
-
-
-def strip_copier_header(data: bytes) -> bytes:
-    """Dumps from old copiers start with 512 bytes that are not part of the ROM."""
-    if len(data) % BANK_SIZE == COPIER_HEADER and header_offset(data[COPIER_HEADER:]) is not None:
-        return data[COPIER_HEADER:]
-    return data
 
 
 def header_offset(data: bytes) -> int | None:
@@ -65,9 +59,7 @@ def platform_of(data: bytes, name: str = "") -> str | None:
     """"sms", "gg", or None when this is not one of their ROMs."""
     off = header_offset(data)
     if off is not None and _size_ok(len(data)):
-        region = data[off + 0xF] >> 4
-        if region in REGIONS:
-            return "gg" if region >= 5 else "sms"
+        return "gg" if (data[off + 0xF] >> 4) >= 5 else "sms"
     ext = Path(name).suffix.lower()
     if ext in (".sms", ".gg") and _size_ok(len(data)):
         return ext[1:]
@@ -93,6 +85,7 @@ def _product(data: bytes, off: int) -> str:
 
 def read_info(data: bytes, name: str = "") -> dict:
     """The cartridge header, in the shape the rest of the fork expects from a ROM reader."""
+    raw = data
     data = strip_copier_header(data)
     platform = platform_of(data, name)
     if platform is None:
@@ -113,7 +106,7 @@ def read_info(data: bytes, name: str = "") -> dict:
         "compiler_guess": "SDCC or a hand-written assembler (unknown)",
         "gp": 0,
         "header": off is not None,
-        "cartridge": f"Sega mapper, {banks} bank{'s' if banks != 1 else ''}",
+        "cartridge": f"Unresolved mapper, {banks} bank{'s' if banks != 1 else ''}",
         "rom_banks": banks,
     }
     if off is not None:
@@ -129,6 +122,9 @@ def read_info(data: bytes, name: str = "") -> dict:
             "checksum": f"0x{data[off + 0xA] | (data[off + 0xB] << 8):04x}",
             "checksum_ok": checksum(data, off) == (data[off + 0xA] | (data[off + 0xB] << 8)),
         })
+    from .sms_identity import identify
+
+    info["identity"] = identify(raw, data, info)
     return info
 
 
@@ -160,23 +156,21 @@ def segment_vram(bank: int, size: int) -> int:
     return slot_base(bank, size)
 
 
-def target_flat(cpu: int, from_bank: int, size: int, here: int | None = None) -> int | None:
-    """The flat ROM offset a call or jump to `cpu` reaches from code in `from_bank`, or None for RAM and ports.
+def target_flat(cpu: int, from_bank: int, size: int, here: int | None = None, *,
+                mapping: BusState | None = None, mapper: str = "sega") -> int | None:
+    """Resolve a ROM reference from explicit mapping or conditional entry evidence.
 
-    Into the slot the code runs from (`here`, its own CPU address, when known), its own bank. Otherwise slot 0 is
-    always bank 0; slot 1 is the caller's own bank when that bank is shown there, else bank 1 (the power-on
-    mapping); slot 2 is bank 2, or the caller's own bank when it is shown there."""
-    if cpu < 0x4000:
-        return cpu
-    if cpu >= 0xC000:
+    An entry establishes only its own CPU window. Display placement does not establish other banks;
+    callers needing reset banks must supply that state explicitly. RAM, BIOS and unknown sources return None.
+    """
+    try:
+        model = Mapper(mapper, size)
+    except ValueError:
         return None
-    if here is not None and here >= 0x4000 and here >> 14 == cpu >> 14:
-        return from_bank * BANK_SIZE + (cpu & (BANK_SIZE - 1))
-    if cpu < 0x8000:
-        bank = from_bank if slot_base(from_bank, size) == 0x4000 else 1
-        return bank * BANK_SIZE + (cpu - 0x4000)
-    bank = from_bank if slot_base(from_bank, size) == 0x8000 else 2
-    return bank * BANK_SIZE + (cpu - 0x8000)
+    if mapping is None:
+        flat = from_bank * BANK_SIZE + (here & (BANK_SIZE - 1)) if here is not None else -1
+        mapping = entry_state(flat, here if here is not None else -1, size)
+    return model.resolve(cpu, mapping).rom_offset
 
 
 def banks(data: bytes) -> list[bytes]:

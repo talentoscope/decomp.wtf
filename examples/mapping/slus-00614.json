@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "platform": "psx",
+  "title": "SLUS-00614 mapped sample",
+  "input": {
+    "format": "psx-disc",
+    "sha256": "2d6843c42ca595687b3780e20ab8c8873705ccead5c8bbc0b69d1fa70bc00a90"
+  },
+  "gp": "0x80080994",
+  "regions": [
+    {
+      "id": "resident",
+      "file": "SLUS_006.14",
+      "source_sha256": "ae19d8d4bdd2db9a933b1e44d70dd61be670781e441d7cb37da85250a7aed31f",
+      "offset": "0x101F8",
+      "size": "0x110",
+      "vram": "0x8003C9F8",
+      "kind": "code",
+      "confidence": "verified",
+      "evidence": "PS-X EXE header loads payload at 0x8002D000, after the 0x800-byte header. Entry 0x80033930 calls 0x8003C9F8 at 0x800339C4. Return/next-entry boundaries are 0x8003CAC4 and 0x8003CB08. Independently inspected from this input; see verify_slus_00614.py and docs/manual-mapping.md.",
+      "functions": [
+        {"offset": 0, "size": "0xCC"},
+        {"offset": "0xCC", "size": "0x44"}
+      ]
+    },
+    {
+      "id": "main_bd3",
+      "file": "MAIN/MAIN.BIN",
+      "source_sha256": "236b3d421d23a9b8204c0e685d008abf262fb0fef1c3423a7d7b072cb2edc1b7",
+      "offset": "0x260004",
+      "size": "0x50",
+      "vram": "0x80023004",
+      "kind": "code",
+      "visible": ["resident"],
+      "confidence": "verified",
+      "evidence": "Static loader trace: 0x8004EB8C requests type 6 with descriptor 0x80071644, words 0x0C020000/0x00000BD3. The reader decodes 24 sectors to cached 0x80020000. MAIN starts at ISO LBA 0x719; (0xBD3-0x719)*0x800=0x25D000, so file 0x260004 maps to 0x80023004. Two complete 0x28-byte wrappers end at 0x80023054. This describes only that bank and these functions, not all MAIN/TOWN/DUNGEON content. Independently inspected from this input; see verify_slus_00614.py and docs/manual-mapping.md.",
+      "functions": [
+        {"offset": 0, "size": "0x28"},
+        {"offset": "0x28", "size": "0x28"}
+      ]
+    }
+  ]
+}

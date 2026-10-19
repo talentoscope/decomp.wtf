@@ -87,8 +87,7 @@ def is_gb(data: bytes) -> bool:
     if data[0x14D] != header_checksum(data):
         return False
     size = len(data)
-    special_sizes = {ROM_SIZES[code] for code in (0x52, 0x53, 0x54)}
-    if size < 0x8000 or size > 0x800000 or ((size & (size - 1)) and size not in special_sizes):
+    if size < 0x8000 or size > 0x800000 or (size & (size - 1)):
         return False
     return True
 
@@ -192,20 +191,18 @@ class GbFunction:
         return len(self.code)
 
 
-def refs_of(code: bytes, addr: int, bank: int, limit: int, flat_start: int | None = None) -> list[tuple[int, int, int]]:
+def refs_of(code: bytes, addr: int, bank: int, limit: int) -> list[tuple[int, int, int]]:
     """(offset_in_function, kind, CPU address) for every call/jump edge out of `code`.
 
     Kind 10 is a call edge, the same label the GBA lane uses, so `xrefs` builds the call graph from it.
-    `limit` is the ROM size: a target outside it is not a reference. `flat_start` distinguishes the
-    physical start from the CPU address for banked code; without it, the start is assumed to be `addr`."""
+    `limit` is the ROM size: a target outside it is not a reference."""
     out: list[tuple[int, int, int]] = []
-    flat_start = addr if flat_start is None else flat_start
     for off, text, _ln in sm83.disassemble(code, addr):
         if not text.startswith(("call ", "jp ")) or "$" not in text:
             continue
         target = int(text.rsplit("$", 1)[1], 16)  # a CPU address
         flat = flat_offset(target, bank)
-        if 0 <= flat < limit and not (flat_start <= flat < flat_start + len(code)):
+        if 0 <= flat < limit and not (addr <= flat < addr + len(code)):
             out.append((off - addr, 10, target))
     return out
 
@@ -243,7 +240,7 @@ def functions(data: bytes, log=lambda *_: None) -> list[GbFunction]:
         insns = list(sm83.disassemble(code, addr))
         if not insns:
             continue
-        refs = refs_of(code, cpu_address(addr), bank_of(addr), len(data), flat_start=addr)
+        refs = refs_of(code, cpu_address(addr), bank_of(addr), len(data))
         out.append(GbFunction(name=function_name(addr), vram=cpu_address(addr), rom=addr,
                               bank=bank_of(addr), code=code, n_insns=len(insns),
                               asm=sm83.asm_text(code, cpu_address(addr), width=4), refs=refs))

@@ -118,11 +118,14 @@ def get(tid: str) -> Toolchain:
 
 def data_dir() -> Path:
     """Per-user data directory for decompnet (toolchains, caches)."""
+    env = os.environ.get("XDG_DATA_HOME")
+    if env:  # set explicitly: it wins on every platform
+        return Path(env) / "decompnet"
     if sys.platform == "win32":
         return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "decompnet"
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "decompnet"
-    return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "decompnet"
+    return Path.home() / ".local" / "share" / "decompnet"
 
 
 def root() -> Path:
@@ -294,6 +297,12 @@ def install(tid: str, *, accept_license: bool = False, force: bool = False, log=
             if part.get("binary"):  # a plain executable, not an archive
                 shutil.copyfile(archive, dest / part["binary"])
                 os.chmod(dest / part["binary"], 0o755)
+            elif part.get("build"):  # source, for a computer its project publishes no build for
+                work = dest / "src"
+                work.mkdir()
+                _extract(archive, work, part.get("subdir"))
+                _build(part, work, dest, log)
+                shutil.rmtree(work, ignore_errors=True)
             else:
                 _extract(archive, dest, part.get("subdir"))
                 if part.get("executable"):  # archives that don't record the executable bit
@@ -323,6 +332,27 @@ def install(tid: str, *, accept_license: bool = False, force: bool = False, log=
     }, indent=2), encoding="utf-8")
     log(f"{tid}: installed at {dest}")
     return dest
+
+
+def _build(part: dict, work: Path, dest: Path, log) -> None:
+    """Build a toolchain from its pinned source: each of the part's `build` commands in the source folder (they name
+    what they need, CMake and a C compiler for most), then its `binaries` kept in the toolchain's folder."""
+    for cmd in part["build"]:
+        exe = shutil.which(cmd[0])
+        if not exe:
+            raise ToolchainError(f"building it from its source needs {cmd[0]} and a C compiler: install them, then "
+                                 "install this again")
+        log(f"  {' '.join(cmd)}")
+        proc = subprocess.run([exe, *cmd[1:]], cwd=work, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace")
+        if proc.returncode != 0:
+            raise ToolchainError(f"`{' '.join(cmd)}` failed:\n{(proc.stdout + proc.stderr).strip()[-2000:]}")
+    for rel in part.get("binaries", []):
+        built = work / rel
+        if not built.is_file():
+            raise ToolchainError(f"the build made no {rel}")
+        shutil.copyfile(built, dest / built.name)
+        os.chmod(dest / built.name, 0o755)
 
 
 def venv_bin(venv: Path, name: str) -> Path:

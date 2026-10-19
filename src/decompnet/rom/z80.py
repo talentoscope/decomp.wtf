@@ -11,7 +11,6 @@ Text style follows `sm83.py` (lower-case mnemonics, `$` hex): `ld a, $12` · `ld
 the absolute address they reach.
 """
 
-# Portions ported from SynapticDreams; Copyright (c) 2026 Sam Wolfs; MIT License (see licenses/synaptic-sms-MIT.txt).
 from __future__ import annotations
 
 R8 = ("b", "c", "d", "e", "h", "l", "(hl)", "a")

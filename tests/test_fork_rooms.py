@@ -47,7 +47,10 @@ def room(tmp_path_factory):
     guest = RomNetwork(g / "d.db", g)
     link = f"https://abc.trycloudflare.com/join/{code}#room={slug}"
     said = []
-    gslug = collab.join_room(guest, link, "alex", ROM, log=said.append, client=client, start=False)
+    with pytest.raises(NetworkError, match="trust"):  # started from scratch: its build setup comes from the host
+        collab.join_room(guest, link, "alex", ROM, log=lambda *_: None, client=client, start=False)
+    assert host.rooms[slug].members() == []  # refused before the host heard of the member
+    gslug = collab.join_room(guest, link, "alex", ROM, log=said.append, client=client, start=False, trust=True)
     return host, slug, guest, gslug, client, link, said
 
 
@@ -70,7 +73,8 @@ def test_joining_needs_the_same_game(room, tmp_path):
     changed[0x5000] ^= 0xFF  # a byte of the ARM9 program
     (tmp_path / "other.nds").write_bytes(bytes(changed))
     with pytest.raises(NetworkError, match="same game"):
-        collab.join_room(other, link, "eve", tmp_path / "other.nds", log=lambda *_: None, client=client, start=False)
+        collab.join_room(other, link, "eve", tmp_path / "other.nds", log=lambda *_: None, client=client, start=False,
+                         trust=True)
 
 
 def test_state_and_bundles_carry_work_never_the_game(room):
@@ -173,3 +177,22 @@ def test_reconnecting_keeps_the_place_in_the_tree(room):
     assert head == _git(Path(host.project_row(slug)["root"]), "rev-parse", "HEAD")
     assert collab.join_room(guest, link, "alex", b"", log=lambda *_: None, client=client, start=False) == gslug
     assert guest.links[gslug].head == head
+
+
+def test_a_change_to_the_build_setup_waits_until_the_member_follows_it(room):
+    host, slug, guest, gslug, client, link, said = room
+    hroot, groot = Path(host.project_row(slug)["root"]), Path(guest.project_row(gslug)["root"])
+    before = _git(groot, "rev-parse", "HEAD")
+    (hroot / "tools" / "configure.py").write_text((hroot / "tools" / "configure.py").read_text() + "\n# the host's change\n")
+    _git(hroot, "commit", "-q", "-am", "a change to the build")
+    tip = _git(hroot, "rev-parse", "HEAD")
+    link_obj = guest.links[gslug]
+    link_obj.sync()
+    assert _git(groot, "rev-parse", "HEAD") == before  # not followed by itself
+    held = guest.overview(gslug)["room"]["held"]
+    assert held["head"] == tip and held["paths"] == ["tools/configure.py"] and "the host's change" in held["diff"]
+    link_obj.sync()  # asked again: still waiting, without fetching it again
+    assert link_obj.held["head"] == tip
+    assert link_obj.follow_held(tip)
+    assert _git(groot, "rev-parse", "HEAD") == tip and link_obj.held is None
+    assert json.loads(guest.project_row(gslug)["config"])["link"]["trusted"] == tip

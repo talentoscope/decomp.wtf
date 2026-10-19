@@ -13,7 +13,10 @@ import re
 from dataclasses import dataclass
 
 # Automatic names spell their address: splat/spimdisasm (func_, D_...), luvdis and pret (sub_, gUnknown_), IDA style.
-AUTO_NAME = re.compile(r"^(?:func|D|B|jtbl|L|RO|STR|FLT|DBL|bss|data|sub|gUnknown|unk|off|dword|word|byte|loc)_([0-9A-Fa-f]{8})$")
+AUTO_NAME = re.compile(
+    # splat/spimdisasm (func_, D_), luvdis/pret (sub_, gUnknown_), IDA style, or Game Boy bank_cpu
+    r"^(?:(?:func|D|B|jtbl|L|RO|STR|FLT|DBL|bss|data|sub|gUnknown|unk|off|dword|word|byte|loc)_([0-9A-Fa-f]{8})"
+    r"|(?:func|sub)_(\d{3})_([0-9A-Fa-f]{4}))$")
 IDENT = re.compile(r"^[A-Za-z_]\w*$")
 
 
@@ -31,15 +34,19 @@ class SymbolTable:
         self.by_addr: dict[int, Symbol] = {}
         self._starts: list[int] = []
         for s in symbols or []:
-            self.add(s, reindex=False)
+            # every name the list holds stays one: on the Game Boy, Master System and NES two banks' functions
+            # share a CPU address, and both names must resolve (a call by name, a rename)
+            self.add(s, reindex=False, replace=False)
         self._reindex()
 
     def _reindex(self) -> None:
         self._starts = sorted(self.by_addr)
 
-    def add(self, sym: Symbol, reindex: bool = True) -> None:
+    def add(self, sym: Symbol, reindex: bool = True, replace: bool = True) -> None:
+        """Add a symbol; with `replace`, it takes the place of the name its address had (a function's real name
+        for its automatic one)."""
         old = self.by_addr.get(sym.address)
-        if old is not None and old.name != sym.name:
+        if replace and old is not None and old.name != sym.name:
             self.by_name.pop(old.name, None)
         self.by_name[sym.name] = sym
         self.by_addr[sym.address] = sym
@@ -58,7 +65,9 @@ class SymbolTable:
         if sym is not None:
             return sym.address
         m = AUTO_NAME.match(name)
-        return int(m.group(1), 16) if m else None
+        if not m:
+            return None
+        return int(m.group(1) or m.group(3), 16)  # (Game Boy bank_cpu names: the CPU address)
 
     def name_at(self, address: int) -> tuple[str, int]:
         """(name, offset) for an address: an exact symbol, the symbol that contains it, or an automatic name."""

@@ -44,7 +44,7 @@ def tools() -> tuple[Path, Path]:
 
         mgbdis = next(iter(toolchains.path("mgbdis").glob("*/mgbdis.py")), None)
         rgbds = toolchains.path("rgbds")
-        if mgbdis and any((rgbds / name).exists() for name in ("rgbasm", "rgbasm.exe")):
+        if mgbdis and (rgbds / "rgbasm").exists():
             return mgbdis, rgbds
     except ImportError:
         pass
@@ -61,14 +61,6 @@ def run(argv: list, cwd: Path) -> None:
                           errors="replace")
     if proc.returncode != 0:
         fail(f"{Path(str(argv[0])).name} failed:\n{(proc.stdout + proc.stderr).strip()[-2000:]}")
-
-
-def rgbds_executable(rgbds: Path, name: str) -> Path:
-    for filename in (name, f"{name}.exe"):
-        path = rgbds / filename
-        if path.exists():
-            return path
-    return rgbds / name
 
 
 def comments() -> dict[str, list[str]]:
@@ -169,11 +161,10 @@ def main(argv: list[str]) -> int:
     if "--no-documented" not in argv and (n := documented(disassembly)):
         print(f"{n} documented routines in place of their bytes")
     rom = f"game{image.suffix}"
-    run([rgbds_executable(rgbds, "rgbasm"), "-o", "game.o", "game.asm"], disassembly)
-    run([rgbds_executable(rgbds, "rgblink"), "-n", "game.sym", "-m", "game.map", "-o", rom, "game.o"], disassembly)
+    run([rgbds / "rgbasm", "-o", "game.o", "game.asm"], disassembly)
+    run([rgbds / "rgblink", "-n", "game.sym", "-m", "game.map", "-o", rom, "game.o"], disassembly)
     # the header's checksums are in the disassembly as the original has them; rgbfix -v writes new ones
-    run([rgbds_executable(rgbds, "rgbfix"), *(["-v"] if "--fix-checksums" in argv else []), "-p", "255", rom],
-        disassembly)
+    run([rgbds / "rgbfix", *(["-v"] if "--fix-checksums" in argv else []), "-p", "255", rom], disassembly)
     built, original = (disassembly / rom).read_bytes(), image.read_bytes()
     shutil.copyfile(disassembly / rom, OUT / rom)
     if built == original:

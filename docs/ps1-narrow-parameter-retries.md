@@ -1,0 +1,9 @@
+# PS1 narrow-parameter retries
+
+Both the local background/polish permuter and donated-worker search can try one K&R spelling of a narrow integer parameter list before random rewrites. The retry requires a pinned PS1 compiler and a fresh candidate with more entry-block narrowing operations than the target: a matching `sll`/`sra` 16/24 pair from an unchanged argument register, or an `andi` byte/halfword mask. This is a targeted heuristic, not a diagnosis of the original signature.
+
+The source rewrite keeps every parameter name, order and declared type and preserves the function body. It handles simple integer and pointer declarations and requires at least one narrow integer parameter. Floating-point arguments, variadics, arrays, function pointers, attributes and unknown by-value types are rejected rather than guessed. The helper does not widen parameters, insert assembly, edit shared context or change compiler flags.
+
+The local pass uses the effective unit compiler/context and its existing deadline and stop handling. A failed baseline provides no retry; a generated variant still goes through ordinary compilation, linked ROM evaluation and improvement recording. Donated jobs supply canonical symbolic relocations, and submitted ROM improvements are re-linked on the coordinator before they can become matches. A zero normalized instruction score cannot override a failed linked-data verdict.
+
+K&R spelling often has no code-generation effect. The original short-parameter microprogram compiled to identical bytes in all nine pinned PS1 GCC variants, and this remains an integration test. A retry that compiles to identical or worse code is not recorded as an improvement. If evidence instead supports a genuinely wider parameter or different call convention, review that declaration with caller evidence; the automatic retry does not invent it.

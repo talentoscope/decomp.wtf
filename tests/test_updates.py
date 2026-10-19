@@ -1,5 +1,4 @@
-"""Updates: decomp.wtf finds a newer version (a release, or new commits on the branch it was installed from), installs
-it with uv and restarts in place. Offline: GitHub's and decomp.wtf's answers are stand-ins."""
+"""Fork updates, legacy install migration, published releases, and restart behavior; network answers are stand-ins."""
 
 import json
 import os
@@ -31,25 +30,57 @@ def test_install_info_round_trip():
 
 def test_release_update(monkeypatch):
     newer = ".".join(str(x + (1 if i == 2 else 0)) for i, x in enumerate(updates.version_key(__version__)))
-    monkeypatch.setattr(updates, "_get", lambda url, timeout=15: f'#!/bin/sh\nVERSION="{newer}"\n'.encode())
-    found = updates.check()
-    assert found["available"] and found["latest"]["version"] == newer and found["error"] is None
-    assert found["spec"] == f"decompnet @ https://decomp.wtf/dl/decompnet-{newer}-py3-none-any.whl"
-    monkeypatch.setattr(updates, "_get", lambda url, timeout=15: f'VERSION="{__version__}"\n'.encode())
-    assert not updates.check()["available"]
-
-
-def test_release_update_from_github_when_decomp_wtf_is_unreachable(monkeypatch):
-    """Issue #15: decomp.wtf blocked or down: the release's version from GitHub, installed from its tag's archive."""
+    release = dict(tag_name=f"v{newer}", body="- Improved updater", published_at="2026-10-16",
+                   assets=[dict(name=f"decompnet-{newer}-py3-none-any.whl")])
+    urls = []
     def get(url, timeout=15):
-        if url.startswith(updates.SITE):
-            raise urllib.error.URLError("blocked")
-        assert url == "https://raw.githubusercontent.com/i12bp8/decomp.wtf/main/site/public/install.sh"
-        return b'VERSION="99.0.0"\n'
+        urls.append(url)
+        return json.dumps(release).encode()
     monkeypatch.setattr(updates, "_get", get)
     found = updates.check()
+    assert found["available"] and found["latest"]["version"] == newer and found["error"] is None
+    assert urls == ["https://api.github.com/repos/SynapticDreams/decomp.wtf/releases/latest"]
+    assert found["spec"] == f"decompnet @ https://github.com/SynapticDreams/decomp.wtf/releases/download/v{newer}/decompnet-{newer}-py3-none-any.whl"
+    assert found["notes"] == ["- Improved updater"] and found["latest"]["date"] == "2026-10-16"
+    release.update(tag_name=f"v{__version__}")
+    assert not updates.check()["available"]
+    release.update(tag_name="v0.1.0")
+    assert not updates.check()["available"]  # never downgrade to an older published release
+
+
+def test_source_only_release_uses_its_tag(monkeypatch):
+    monkeypatch.setattr(updates, "_json", lambda _: dict(tag_name="v99.0.0", assets=[]))
+    found = updates.check()
     assert found["available"] and found["latest"]["version"] == "99.0.0" and found["error"] is None
-    assert found["spec"] == "decompnet @ https://github.com/i12bp8/decomp.wtf/archive/refs/tags/v99.0.0.tar.gz"
+    assert found["spec"] == "decompnet @ https://github.com/SynapticDreams/decomp.wtf/archive/refs/tags/v99.0.0.tar.gz"
+
+
+def test_existing_install_info_follows_the_fork_and_preserves_custom_repositories():
+    path = updates.info_file()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(dict(channel="branch", branch="main", commit="a" * 40, repo=updates.LEGACY_REPO)))
+    cur = updates.installed()
+    assert cur["repo"] == updates.REPO and cur["branch"] == "main" and cur["commit"] == "a" * 40
+    updates.record("release", repo=updates.LEGACY_REPO)
+    assert json.loads(path.read_text())["repo"] == updates.REPO
+    updates.record("release", repo="ExampleOwner/example-fork")
+    assert updates.installed()["repo"] == "ExampleOwner/example-fork"
+
+
+def test_unpublished_versions_are_not_offered(monkeypatch):
+    def missing(url):
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+    monkeypatch.setattr(updates, "_json", missing)
+    found = updates.check()
+    assert not found["available"] and found["error"] is None and found["latest"] is None
+
+
+@pytest.mark.parametrize("release", [dict(tag_name="v1.0.0-beta"), dict(tag_name="v1.0.0", draft=True),
+                                     dict(tag_name="v1.0.0", prerelease=True)])
+def test_invalid_or_unstable_release_is_not_offered(monkeypatch, release):
+    monkeypatch.setattr(updates, "_json", lambda _: release)
+    found = updates.check()
+    assert not found["available"] and found["error"]
 
 
 def test_branch_update(monkeypatch):
@@ -64,7 +95,7 @@ def test_branch_update(monkeypatch):
     monkeypatch.setattr(updates, "_branch_version", lambda repo, sha: "0.10.0")
     found = updates.check()
     assert found["available"] and found["latest"]["commit"] == head and found["notes"] == ["Newest", "Older one"]
-    assert found["spec"] == f"decompnet @ https://github.com/i12bp8/decomp.wtf/archive/{head}.tar.gz"
+    assert found["spec"] == f"decompnet @ https://github.com/SynapticDreams/decomp.wtf/archive/{head}.tar.gz"
 
     # installed from a commit newer than the branch (pushed elsewhere): not an "update"
     answers[f"compare/{have}...{head}"] = {"status": "behind", "commits": []}
@@ -105,7 +136,7 @@ def test_install_runs_uv_then_the_new_setup(tmp_path, monkeypatch):
     monkeypatch.setattr(updates, "uv", lambda: str(uv))
     updates.record("branch", "cross-platform", "1" * 40)
     found = {"current": updates.installed(), "available": True, "latest": {"version": "0.10.0", "commit": "2" * 40},
-             "spec": "decompnet @ https://github.com/i12bp8/decomp.wtf/archive/" + "2" * 40 + ".tar.gz"}
+             "spec": "decompnet @ https://github.com/SynapticDreams/decomp.wtf/archive/" + "2" * 40 + ".tar.gz"}
     said = []
     updates.install(found, log=said.append)
     ran = calls.read_text().splitlines()

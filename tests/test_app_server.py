@@ -345,6 +345,7 @@ def test_a_project_that_cant_be_read_is_listed_with_the_reason(app, monkeypatch)
         db.execute("DELETE FROM projects WHERE slug='odd-game'")
 
 
+@needs_demo
 def test_the_api_agent_stays_within_a_small_local_context(app, monkeypatch):
     """A local llama.cpp model with a small context: the agent learns it from /props, trims older tool output to
     fit, and when the server still says the request is too long, trims harder and sends it again."""
@@ -385,3 +386,19 @@ def test_fit_keeps_the_task_and_the_latest_exchange():
     assert msgs[0]["content"] == "rules " * 100 and msgs[1]["content"] == "task " * 100
     assert msgs[-1]["content"] == "assembly 5 " * 400  # the latest result, whole
     assert "trimmed" in msgs[3]["content"]
+
+
+def test_codex_effort_is_passed_on_and_remembered_for_the_next_start(app, monkeypatch):
+    client, net, manager = app
+    started = []
+    monkeypatch.setattr(net, "project_row", lambda slug: {})
+    monkeypatch.setattr(manager, "start", lambda kind, slug, count, options: started.append((kind, options)) or ["codex-1"])
+    r = client.post("/api/agents/start", json={"kind": "codex", "slug": "demo", "count": 1,
+                                               "options": {"model": "gpt-a", "effort": "high", "junk": "dropped"}},
+                    headers={"X-Decomp": "1"})
+    assert r.status_code == 200 and started[0][0] == "codex"
+    assert {k: started[0][1][k] for k in ("model", "effort")} == {"model": "gpt-a", "effort": "high"} and "junk" not in started[0][1]
+    assert client.get("/api/state").json()["settings"]["launcher"] == {"kind": "codex", "model": "gpt-a", "count": 1, "effort": "high"}
+    client.post("/api/agents/start", json={"kind": "codex", "slug": "demo", "count": 1, "options": {"model": "gpt-a"}},
+                headers={"X-Decomp": "1"})
+    assert "effort" not in client.get("/api/state").json()["settings"]["launcher"]  # Default again: nothing remembered

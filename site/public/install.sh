@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # decomp.wtf installer for Linux (Windows: install.ps1, in PowerShell). macOS isn't supported.
 #
-#   curl -fsSL https://decomp.wtf/install.sh | bash
-#   (can't reach decomp.wtf? the same from GitHub:
-#    curl -fsSL https://raw.githubusercontent.com/i12bp8/decomp.wtf/main/site/public/install.sh | bash)
+#   curl -fsSL https://github.com/SynapticDreams/decomp.wtf/releases/latest/download/install.sh | bash
 #
 # decomp.wtf installs on this computer, with uv:
 #   1. installs uv, Astral's Python tool manager, if you don't have it (asks first)
@@ -23,8 +21,8 @@
 # On a server, decomp.wtf also runs in Docker: docker-compose.yml in the repository.
 set -euo pipefail
 
-VERSION="0.10.6"
-REPO="i12bp8/decomp.wtf"
+VERSION="0.10.7"
+REPO="SynapticDreams/decomp.wtf"
 START=1
 SOURCE="${DECOMP_SOURCE:-}"
 [ -z "$SOURCE" ] && [ -n "${DECOMP_BRANCH:-}" ] && SOURCE="branch:${DECOMP_BRANCH}"
@@ -69,8 +67,8 @@ bold "decomp.wtf setup"
 OS="$(uname -s)"
 case "$OS" in
   Linux) ;;
-  Darwin) fail "macOS isn't supported: decomp.wtf runs on Linux and on Windows (in WSL 2), on x86-64 PCs (the games' compilers are x86 programs). On an Intel Mac, an x86-64 Linux virtual machine works too." ;;
-  *) fail "this installer is for Linux; on Windows run in PowerShell: irm https://decomp.wtf/install.ps1 | iex" ;;
+  Darwin) fail "macOS isn't supported: use a supported x86-64 Linux or Windows environment." ;;
+  *) fail "this installer is for Linux; on Windows run in PowerShell: irm https://github.com/$REPO/releases/latest/download/install.ps1 | iex" ;;
 esac
 case "$(uname -m)" in
   x86_64|amd64) ;;
@@ -83,7 +81,7 @@ command -v curl >/dev/null || fail "curl is required"
 CHANNEL=release BRANCH="" COMMIT="" SPEC="" SRC_DIR=""
 case "$SOURCE" in
   release)
-    SPEC="decompnet @ ${DECOMP_WHEEL:-https://decomp.wtf/dl/decompnet-${VERSION}-py3-none-any.whl}" ;;
+    SPEC="decompnet @ ${DECOMP_WHEEL:-https://github.com/$REPO/releases/download/v${VERSION}/decompnet-${VERSION}-py3-none-any.whl}" ;;
   branch:*)
     CHANNEL=branch BRANCH="${SOURCE#branch:}"
     [ -n "$BRANCH" ] || fail "--source branch:<name> needs a branch name" ;;
@@ -136,10 +134,10 @@ elif [ "$CHANNEL" = branch ]; then
   resolve_branch
   step "installing decomp.wtf from the $BRANCH branch${COMMIT:+ @ ${COMMIT:0:7}}"
 else
-  WHEEL="${DECOMP_WHEEL:-https://decomp.wtf/dl/decompnet-${VERSION}-py3-none-any.whl}"
+  WHEEL="${DECOMP_WHEEL:-https://github.com/$REPO/releases/download/v${VERSION}/decompnet-${VERSION}-py3-none-any.whl}"
   if [ -z "${DECOMP_WHEEL:-}" ] && ! curl -fsSLI --max-time 15 -o /dev/null "$WHEEL" 2>/dev/null; then
-    # decomp.wtf blocked or down (a network filter, an outage): the same release, from GitHub
-    step "decomp.wtf's download can't be reached from here: installing ${VERSION} from GitHub instead"
+    # A source-only release can still be installed from its immutable tag.
+    step "the release wheel is unavailable: installing ${VERSION} from its source tag"
     SPEC="decompnet @ https://github.com/$REPO/archive/refs/tags/v${VERSION}.tar.gz"
   fi
   step "installing decomp.wtf ${VERSION}"

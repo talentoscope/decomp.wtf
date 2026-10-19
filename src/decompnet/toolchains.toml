@@ -83,25 +83,6 @@ url = "https://github.com/decompals/mips-binutils-2.6/releases/download/v0.3/bin
 sha256 = "ab21ad5908fb7776a4b0c596cc82f216876e3b5d108c7c7c1f33543b3f3fce4c"
 platforms = ["macos-x86_64", "macos-arm64"]
 
-["gcc-2.5.7-psx"]
-name = "GCC 2.5.7 for PlayStation + maspsx (ASPSX 2.21)"
-platform = "PS1"
-arch = "mipsel"
-license = "GPL-2.0"
-source = "decompals/old-gcc 0.17 (gcc-2.5.7-psx), decompals/mips-binutils-2.6 v0.3, mkst/maspsx"
-description = "PlayStation GCC 2.5.7 with maspsx configured to reproduce ASPSX 2.21 output."
-flags = ["-O2", "-G0", "-mips1", "-msoft-float"]
-requires = ["maspsx"]
-cmd = ["/bin/sh", "-c", "src=$1; obj=$2; inc=$3; shift 3; \"{tc}/gcc\" -B\"{tc}/\" \"$@\" -I\"$inc\" -S \"$src\" -o \"$obj.s\" && python3 \"{tc:maspsx}/maspsx.py\" --aspsx-version=2.21 --run-assembler --gnu-as-path=\"{tc}/as\" -G0 -EL -o \"$obj\" \"$obj.s\" </dev/null", "gcc-2.5.7-psx", "{src}", "{obj}", "{include}", "{flags}"]
-[["gcc-2.5.7-psx".parts]]
-url = "https://github.com/decompals/old-gcc/releases/download/0.17/gcc-2.5.7-psx.tar.gz"
-sha256 = "0db1fb403c766e51b094354b9a136a6c1f01457aa41ccca28ac457b7cb67d871"
-platforms = ["linux-x86_64"]
-[["gcc-2.5.7-psx".parts]]
-url = "https://github.com/decompals/mips-binutils-2.6/releases/download/v0.3/binutils-2.6-linux.tar.gz"
-sha256 = "5a612cd28344e5b410c3344ec5dcfb92d9d03947756f190cd12404055b4a624d"
-platforms = ["linux-x86_64"]
-
 ["gcc-2.8.1-psx"]
 name = "GCC 2.8.1 for PlayStation + binutils 2.6"
 platform = "PS1"
@@ -127,6 +108,132 @@ platforms = ["macos-x86_64", "macos-arm64"]
 url = "https://github.com/decompals/mips-binutils-2.6/releases/download/v0.3/binutils-2.6-mac.tar.gz"
 sha256 = "ab21ad5908fb7776a4b0c596cc82f216876e3b5d108c7c7c1f33543b3f3fce4c"
 platforms = ["macos-x86_64", "macos-arm64"]
+
+["gcc-2.5.7-psx"]
+name = "GCC 2.5.7 for PlayStation + binutils 2.6"
+platform = "PS1"
+arch = "mipsel"
+license = "GPL-2.0"
+source = "decompals/old-gcc 0.17 (gcc-2.5.7-psx), decompals/mips-binutils-2.6 v0.3"
+description = "GCC 2.5.7 with the PlayStation patches, the C compiler family behind PSY-Q, with the GNU assembler."
+cc = ["{tc}/gcc", "-B{tc}/", "-c", "-Wa,-EL"]
+flags = ["-O2", "-G8"]
+[["gcc-2.5.7-psx".parts]]
+url = "https://github.com/decompals/old-gcc/releases/download/0.17/gcc-2.5.7-psx.tar.gz"
+sha256 = "0db1fb403c766e51b094354b9a136a6c1f01457aa41ccca28ac457b7cb67d871"
+platforms = ["linux-x86_64"]
+[["gcc-2.5.7-psx".parts]]
+url = "https://github.com/decompals/mips-binutils-2.6/releases/download/v0.3/binutils-2.6-linux.tar.gz"
+sha256 = "5a612cd28344e5b410c3344ec5dcfb92d9d03947756f190cd12404055b4a624d"
+platforms = ["linux-x86_64"]
+
+["gcc-2.6.0-psx"]
+name = "GCC 2.6.0 for PlayStation + binutils 2.6"
+platform = "PS1"
+arch = "mipsel"
+license = "GPL-2.0"
+source = "decompals/old-gcc 0.17 (gcc-2.6.0-psx), decompals/mips-binutils-2.6 v0.3"
+description = "GCC 2.6.0 with the PlayStation patches, the C compiler family behind PSY-Q, with the GNU assembler."
+cc = ["{tc}/gcc", "-B{tc}/", "-c", "-Wa,-EL"]
+flags = ["-O2", "-G8"]
+[["gcc-2.6.0-psx".parts]]
+url = "https://github.com/decompals/old-gcc/releases/download/0.17/gcc-2.6.0-psx.tar.gz"
+sha256 = "358dac949f0f566af9c6af93bba0d4ac04d56ca9df80c58bd66d81bbb50deceb"
+platforms = ["linux-x86_64"]
+[["gcc-2.6.0-psx".parts]]
+url = "https://github.com/decompals/mips-binutils-2.6/releases/download/v0.3/binutils-2.6-linux.tar.gz"
+sha256 = "5a612cd28344e5b410c3344ec5dcfb92d9d03947756f190cd12404055b4a624d"
+platforms = ["linux-x86_64"]
+
+["gcc-2.6.3-psx"]
+name = "GCC 2.6.3 for PlayStation + binutils 2.6"
+platform = "PS1"
+arch = "mipsel"
+license = "GPL-2.0"
+source = "decompals/old-gcc 0.17 (gcc-2.6.3-psx), decompals/mips-binutils-2.6 v0.3"
+description = "GCC 2.6.3 with the PlayStation patches, the C compiler family behind PSY-Q, with the GNU assembler."
+cc = ["{tc}/gcc", "-B{tc}/", "-c", "-Wa,-EL"]
+flags = ["-O2", "-G8"]
+[["gcc-2.6.3-psx".parts]]
+url = "https://github.com/decompals/old-gcc/releases/download/0.17/gcc-2.6.3-psx.tar.gz"
+sha256 = "01e6e8c4933414ea3f8d8e3bc766a1f5fafd4fc0110e0b75d1f691bd791989b1"
+platforms = ["linux-x86_64"]
+[["gcc-2.6.3-psx".parts]]
+url = "https://github.com/decompals/mips-binutils-2.6/releases/download/v0.3/binutils-2.6-linux.tar.gz"
+sha256 = "5a612cd28344e5b410c3344ec5dcfb92d9d03947756f190cd12404055b4a624d"
+platforms = ["linux-x86_64"]
+
+["gcc-2.7.2-cdk"]
+name = "GCC 2.7.2 CDK for PlayStation + binutils 2.6"
+platform = "PS1"
+arch = "mipsel"
+license = "GPL-2.0"
+source = "decompals/old-gcc 0.17 (gcc-2.7.2-cdk), decompals/mips-binutils-2.6 v0.3"
+description = "GCC 2.7.2 CDK with the PlayStation patches, the C compiler family behind PSY-Q, with the GNU assembler."
+cc = ["{tc}/gcc", "-B{tc}/", "-c", "-Wa,-EL"]
+flags = ["-O2", "-G8"]
+[["gcc-2.7.2-cdk".parts]]
+url = "https://github.com/decompals/old-gcc/releases/download/0.17/gcc-2.7.2-cdk.tar.gz"
+sha256 = "42bb0df96db11a9b5d2e23d78bdc962791f40046280d3d360da93fe5eef6f0bb"
+platforms = ["linux-x86_64"]
+[["gcc-2.7.2-cdk".parts]]
+url = "https://github.com/decompals/mips-binutils-2.6/releases/download/v0.3/binutils-2.6-linux.tar.gz"
+sha256 = "5a612cd28344e5b410c3344ec5dcfb92d9d03947756f190cd12404055b4a624d"
+platforms = ["linux-x86_64"]
+
+["gcc-2.8.0-psx"]
+name = "GCC 2.8.0 for PlayStation + binutils 2.6"
+platform = "PS1"
+arch = "mipsel"
+license = "GPL-2.0"
+source = "decompals/old-gcc 0.17 (gcc-2.8.0-psx), decompals/mips-binutils-2.6 v0.3"
+description = "GCC 2.8.0 with the PlayStation patches, the C compiler family behind PSY-Q, with the GNU assembler."
+cc = ["{tc}/gcc", "-B{tc}/", "-c", "-Wa,-EL"]
+flags = ["-O2", "-G8"]
+[["gcc-2.8.0-psx".parts]]
+url = "https://github.com/decompals/old-gcc/releases/download/0.17/gcc-2.8.0-psx.tar.gz"
+sha256 = "1a3c956fe8aea5ebdb251749d95de2c84f023530584d7bd663744b5ec24050b7"
+platforms = ["linux-x86_64"]
+[["gcc-2.8.0-psx".parts]]
+url = "https://github.com/decompals/mips-binutils-2.6/releases/download/v0.3/binutils-2.6-linux.tar.gz"
+sha256 = "5a612cd28344e5b410c3344ec5dcfb92d9d03947756f190cd12404055b4a624d"
+platforms = ["linux-x86_64"]
+
+["gcc-2.91.66-psx"]
+name = "GCC 2.91.66 for PlayStation + binutils 2.6"
+platform = "PS1"
+arch = "mipsel"
+license = "GPL-2.0"
+source = "decompals/old-gcc 0.17 (gcc-2.91.66-psx), decompals/mips-binutils-2.6 v0.3"
+description = "GCC 2.91.66 with the PlayStation patches, the C compiler family behind PSY-Q, with the GNU assembler."
+cc = ["{tc}/gcc", "-B{tc}/", "-c", "-Wa,-EL"]
+flags = ["-O2", "-G8"]
+[["gcc-2.91.66-psx".parts]]
+url = "https://github.com/decompals/old-gcc/releases/download/0.17/gcc-2.91.66-psx.tar.gz"
+sha256 = "f773a0a9659fa4ff74313ac4363d939312e8125675cd09ad9f8c1202f587f1fd"
+platforms = ["linux-x86_64"]
+[["gcc-2.91.66-psx".parts]]
+url = "https://github.com/decompals/mips-binutils-2.6/releases/download/v0.3/binutils-2.6-linux.tar.gz"
+sha256 = "5a612cd28344e5b410c3344ec5dcfb92d9d03947756f190cd12404055b4a624d"
+platforms = ["linux-x86_64"]
+
+["gcc-2.95.2-psx"]
+name = "GCC 2.95.2 for PlayStation + binutils 2.6"
+platform = "PS1"
+arch = "mipsel"
+license = "GPL-2.0"
+source = "decompals/old-gcc 0.17 (gcc-2.95.2-psx), decompals/mips-binutils-2.6 v0.3"
+description = "GCC 2.95.2 with the PlayStation patches, the C compiler family behind PSY-Q, with the GNU assembler."
+cc = ["{tc}/gcc", "-B{tc}/", "-c", "-Wa,-EL"]
+flags = ["-O2", "-G8"]
+[["gcc-2.95.2-psx".parts]]
+url = "https://github.com/decompals/old-gcc/releases/download/0.17/gcc-2.95.2-psx.tar.gz"
+sha256 = "932ed3669710a82b12570c29c46ff42989b6505b2af10db84d4551d55dfc0b1c"
+platforms = ["linux-x86_64"]
+[["gcc-2.95.2-psx".parts]]
+url = "https://github.com/decompals/mips-binutils-2.6/releases/download/v0.3/binutils-2.6-linux.tar.gz"
+sha256 = "5a612cd28344e5b410c3344ec5dcfb92d9d03947756f190cd12404055b4a624d"
+platforms = ["linux-x86_64"]
 
 ["ee-gcc-2.96"]
 name = "EE-GCC 2.96"
@@ -379,68 +486,6 @@ url = "https://github.com/pret/agbcc/releases/download/release/agbcc.tar.gz"
 sha256 = "bcf0197e3e27d8e08506a142e25fa68ea7f6679a98347a6406804eb3f9ff4d29"
 platforms = ["linux-x86_64"]
 
-["gbdk-2020"]
-name = "GBDK-2020 (SDCC for 8-bit consoles)"
-platform = "Game Boy / Game Boy Color / Master System / Game Gear"
-arch = "sm83"
-license = "MIT (GBDK-2020) + GPL-2.0 (SDCC)"
-source = "gbdk-2020/gbdk-2020 4.5.0"
-description = "Pinned SDCC 4.5.1 and assemblers for byte-exact Game Boy, Master System and Game Gear C matching."
-cc = ["{tc}/gbdk/bin/sdcc", "-msm83", "-c", "-I{include}"]
-flags = ["--fsigned-char"]
-[["gbdk-2020".parts]]
-url = "https://github.com/gbdk-2020/gbdk-2020/releases/download/4.5.0/gbdk-macos-arm64.tar.gz"
-sha256 = "289ee60e46c5a2785a21e35533f84a5131ed4a063b21b0dbdedc9a10af15bf78"
-platforms = ["macos-arm64"]
-[["gbdk-2020".parts]]
-url = "https://github.com/gbdk-2020/gbdk-2020/releases/download/4.5.0/gbdk-macos.tar.gz"
-sha256 = "1aa549d12032d8f6509d11923bb28b1a453098f42597feb378e9a42541f8fd89"
-platforms = ["macos-x86_64"]
-[["gbdk-2020".parts]]
-url = "https://github.com/gbdk-2020/gbdk-2020/releases/download/4.5.0/gbdk-linux64.tar.gz"
-sha256 = "d7857a5f6d135ee4c249043ca26aad9f2ec8ab5d4106d97720d404114f42605c"
-platforms = ["linux-x86_64"]
-[["gbdk-2020".parts]]
-url = "https://github.com/gbdk-2020/gbdk-2020/releases/download/4.5.0/gbdk-linux-arm64.tar.gz"
-sha256 = "31eb2235f0fdb60163d0b1e9574a022098d6069cd56606a1daca4478a46e0439"
-platforms = ["linux-aarch64"]
-[["gbdk-2020".parts]]
-url = "https://github.com/gbdk-2020/gbdk-2020/releases/download/4.5.0/gbdk-win64.zip"
-sha256 = "266854ce92e3064871c5b28cd3436cc2a6cb136af9e7cf617140108f8c1c5890"
-platforms = ["windows-x86_64"]
-
-[mgbdis]
-name = "mgbdis"
-kind = "tool"
-license = "MIT"
-source = "mattcurrie/mgbdis v3.0"
-description = "Game Boy disassembler; paired with RGBDS to verify code/data splitting and full-ROM rebuilds."
-[["mgbdis".parts]]
-url = "https://github.com/mattcurrie/mgbdis/archive/refs/tags/v3.0.tar.gz"
-sha256 = "f0f3d3b276cbee792815bece448257d220e51ed9400a0a02e8a68ac2b33e6b2d"
-platforms = ["linux-x86_64", "linux-aarch64", "macos-x86_64", "macos-arm64", "windows-x86_64"]
-
-["rgbds"]
-name = "RGBDS (rgbasm, rgblink, rgbfix)"
-kind = "tool"
-platform = "Game Boy / Game Boy Color"
-arch = "sm83"
-license = "MIT"
-source = "gbdev/rgbds v1.0.4"
-description = "The Game Boy assembler/linker used to validate disassembly and rebuild exported projects."
-[["rgbds".parts]]
-url = "https://github.com/gbdev/rgbds/releases/download/v1.0.4/rgbds-macos.zip"
-sha256 = "62d1669bbe3b2bf2cfc2e72076d3c8c00fc023a9cc15d458f0c723bd9d0312c4"
-platforms = ["macos-arm64", "macos-x86_64"]
-[["rgbds".parts]]
-url = "https://github.com/gbdev/rgbds/releases/download/v1.0.4/rgbds-linux-x86_64.tar.xz"
-sha256 = "3e19e50ea602e316be709160acaf0a708b1fa6d32d219ec541f244442895dbb7"
-platforms = ["linux-x86_64"]
-[["rgbds".parts]]
-url = "https://github.com/gbdev/rgbds/releases/download/v1.0.4/rgbds-win64.zip"
-sha256 = "bd1d7e386f290afd57f4ea9a7353bfcd4ae10884a94c5c1f2fc42a75db7f97e6"
-platforms = ["windows-x86_64"]
-
 [maspsx]
 name = "maspsx"
 kind = "tool"
@@ -589,6 +634,50 @@ git = "https://github.com/aarant/luvdis"
 commit = "ec3a4e3ee3afe3e9b4a9c7ae8fffc65e1ea2096c"
 pip_extra = ["setuptools<70"]
 
+["gbdk-2020"]
+name = "GBDK-2020 (SDCC for the Game Boy)"
+platform = "Game Boy / Game Boy Color / Master System / Game Gear / NES"
+arch = "sm83"
+license = "MIT (GBDK-2020) + GPL-2.0 (SDCC)"
+source = "gbdk-2020/gbdk-2020 4.5.0 (SDCC 4.5.1 + sdasgb + sdldgb + makebin + libraries)"
+description = "The C toolchain for Game Boy, Game Boy Color, Master System, Game Gear and NES: SDCC's Sharp SM83, Zilog Z80 and MOS 6502 back ends with their assemblers, linker and libraries. Candidates are compiled through decompnet.rom.gb_build (sdcc -S, sdasgb -l, then the listing's instruction bytes), because these CPUs have no ELF object format in this pipeline (and capstone has no SM83 or Z80 decoder: rom/sm83.py, rom/z80.py and rom/mos6502.py provide them). Pass the project's symbol table to gb_build and external references resolve to the ROM's own addresses."
+# The release tarball nests everything under gbdk/, which is how the installer lays it out.
+cc = ["{tc}/gbdk/bin/sdcc", "-msm83", "-c", "-I{include}"]
+# what GBDK's own lcc runs sdcc with: char is signed, and no optimization flag
+flags = ["--fsigned-char"]
+[["gbdk-2020".parts]]
+url = "https://github.com/gbdk-2020/gbdk-2020/releases/download/4.5.0/gbdk-macos-arm64.tar.gz"
+sha256 = "289ee60e46c5a2785a21e35533f84a5131ed4a063b21b0dbdedc9a10af15bf78"
+platforms = ["macos-arm64"]
+[["gbdk-2020".parts]]
+url = "https://github.com/gbdk-2020/gbdk-2020/releases/download/4.5.0/gbdk-macos.tar.gz"
+sha256 = "1aa549d12032d8f6509d11923bb28b1a453098f42597feb378e9a42541f8fd89"
+platforms = ["macos-x86_64"]
+[["gbdk-2020".parts]]
+url = "https://github.com/gbdk-2020/gbdk-2020/releases/download/4.5.0/gbdk-linux64.tar.gz"
+sha256 = "d7857a5f6d135ee4c249043ca26aad9f2ec8ab5d4106d97720d404114f42605c"
+platforms = ["linux-x86_64"]
+[["gbdk-2020".parts]]
+url = "https://github.com/gbdk-2020/gbdk-2020/releases/download/4.5.0/gbdk-linux-arm64.tar.gz"
+sha256 = "31eb2235f0fdb60163d0b1e9574a022098d6069cd56606a1daca4478a46e0439"
+platforms = ["linux-aarch64"]
+[["gbdk-2020".parts]]
+url = "https://github.com/gbdk-2020/gbdk-2020/releases/download/4.5.0/gbdk-win64.zip"
+sha256 = "266854ce92e3064871c5b28cd3436cc2a6cb136af9e7cf617140108f8c1c5890"
+platforms = ["windows-x86_64"]
+
+[mgbdis]
+name = "mgbdis"
+kind = "tool"
+license = "MIT"
+source = "mattcurrie/mgbdis v3.0"
+description = "Game Boy ROM disassembler that writes RGBDS assembly with proper code/data separation and its own label generation. The Game Boy split uses it when it is installed (assembling its output with rgbds reproduces the ROM byte for byte, which is the check that the split is faithful); without it the built-in call-graph split is used."
+# A plain script directory, not a Python package: ship the released source archive (it bundles png.py).
+[["mgbdis".parts]]
+url = "https://github.com/mattcurrie/mgbdis/archive/refs/tags/v3.0.tar.gz"
+sha256 = "f0f3d3b276cbee792815bece448257d220e51ed9400a0a02e8a68ac2b33e6b2d"
+platforms = ["linux-x86_64", "linux-aarch64", "macos-x86_64", "macos-arm64", "windows-x86_64"]
+
 ["wla-dx"]
 name = "WLA-DX (wla-z80, wlalink)"
 kind = "tool"
@@ -596,29 +685,56 @@ platform = "Master System / Game Gear"
 arch = "z80"
 license = "GPL-2.0-or-later"
 source = "vhelin/wla-dx v10.7"
-description = "The Z80 assembler and linker used to judge documented Master System / Game Gear assembly and rebuild exported projects."
-[[wla-dx.parts]]
+description = "The Z80 assembler and linker Master System and Game Gear disassemblies are written for. It assembles routines documented in assembly (the judge) and the exported project, and runs as its own program: nothing of it is part of decomp.wtf. Its project publishes builds for Windows only, so elsewhere it's built from its source when installed (needs CMake and a C compiler)."
+# the source, built on the computer it's installed on (CMake: binaries/ in its build folder)
+[["wla-dx".parts]]
 url = "https://github.com/vhelin/wla-dx/archive/refs/tags/v10.7.tar.gz"
 sha256 = "38296a96bc20be873d17e0e88be0c5b20a15ef2ec4da5279600e56af30ad925a"
 subdir = "wla-dx-10.7"
+build = [["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"],
+         ["cmake", "--build", "build", "--target", "wla-z80", "wlalink", "--parallel", "4"]]
+binaries = ["build/binaries/wla-z80", "build/binaries/wlalink"]
 platforms = ["linux-x86_64", "linux-aarch64", "macos-x86_64", "macos-arm64"]
-[[wla-dx.parts]]
+[["wla-dx".parts]]
 url = "https://github.com/vhelin/wla-dx/releases/download/v10.7/wla_dx_v10.7_Win64.zip"
 sha256 = "82922a530ae989bd5f8057fa4cfef3d0022d7353b5aeb7858b9320eae9b56ebd"
 subdir = "wla_dx_v10.7_Win64"
 platforms = ["windows-x86_64"]
-["wla-dx".binaries]
-windows-x86_64 = ["wla-z80.exe", "wlalink.exe"]
-linux-x86_64 = ["build/binaries/wla-z80", "build/binaries/wlalink"]
-linux-aarch64 = ["build/binaries/wla-z80", "build/binaries/wlalink"]
-macos-x86_64 = ["build/binaries/wla-z80", "build/binaries/wlalink"]
-macos-arm64 = ["build/binaries/wla-z80", "build/binaries/wlalink"]
-["wla-dx".build]
-linux-x86_64 = [["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"],
-                ["cmake", "--build", "build", "--target", "wla-z80", "wlalink", "--parallel", "4"]]
-linux-aarch64 = [["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"],
-                 ["cmake", "--build", "build", "--target", "wla-z80", "wlalink", "--parallel", "4"]]
-macos-x86_64 = [["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"],
-                ["cmake", "--build", "build", "--target", "wla-z80", "wlalink", "--parallel", "4"]]
-macos-arm64 = [["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"],
-               ["cmake", "--build", "build", "--target", "wla-z80", "wlalink", "--parallel", "4"]]
+
+["cc65"]
+name = "cc65 (ca65, ld65)"
+kind = "tool"
+platform = "NES"
+arch = "mos6502"
+license = "Zlib"
+source = "cc65/cc65 V2.19"
+description = "The 6502 assembler and linker NES disassemblies are written for. It assembles routines documented in assembly (the judge) and the exported project. Its project publishes no builds of its releases, so it's built from its source when installed (needs make and a C compiler)."
+# the source, built on the computer it's installed on (its Makefile: bin/ca65 and bin/ld65)
+[["cc65".parts]]
+url = "https://github.com/cc65/cc65/archive/refs/tags/V2.19.tar.gz"
+sha256 = "157b8051aed7f534e5093471e734e7a95e509c577324099c3c81324ed9d0de77"
+subdir = "cc65-2.19"
+build = [["make", "-C", "src", "ca65", "ld65"]]
+binaries = ["bin/ca65", "bin/ld65"]
+platforms = ["linux-x86_64", "linux-aarch64", "macos-x86_64", "macos-arm64"]
+
+["rgbds"]
+name = "RGBDS (rgbasm, rgblink, rgbfix)"
+kind = "tool"
+platform = "Game Boy / Game Boy Color"
+arch = "sm83"
+license = "MIT"
+source = "gbdev/rgbds v1.0.4"
+description = "The Game Boy assembler/linker/fixer the mgbdis split assembles its output with, and the standard toolchain for matching-grade Game Boy assembly work."
+[["rgbds".parts]]
+url = "https://github.com/gbdev/rgbds/releases/download/v1.0.4/rgbds-macos.zip"
+sha256 = "62d1669bbe3b2bf2cfc2e72076d3c8c00fc023a9cc15d458f0c723bd9d0312c4"
+platforms = ["macos-arm64", "macos-x86_64"]
+[["rgbds".parts]]
+url = "https://github.com/gbdev/rgbds/releases/download/v1.0.4/rgbds-linux-x86_64.tar.xz"
+sha256 = "3e19e50ea602e316be709160acaf0a708b1fa6d32d219ec541f244442895dbb7"
+platforms = ["linux-x86_64"]
+[["rgbds".parts]]
+url = "https://github.com/gbdev/rgbds/releases/download/v1.0.4/rgbds-win64.zip"
+sha256 = "bd1d7e386f290afd57f4ea9a7353bfcd4ae10884a94c5c1f2fc42a75db7f97e6"
+platforms = ["windows-x86_64"]

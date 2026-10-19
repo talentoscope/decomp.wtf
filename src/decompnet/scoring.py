@@ -15,6 +15,26 @@ import capstone
 
 from .elfobj import FunctionObj, mask_relocs
 
+# How far a function is, from its best so far: what routes a tiered helper's model (app.agents.tier_for), and what
+# an attempt is stamped with, so setups are compared on like work. Fractions of the worst score (n_insns * 100:
+# every instruction wrong), so they mean the same on a 20-instruction function and a 2000-instruction one.
+NEAR_MISS = 0.10      # best_score <= 10% of the worst score: operands and registers left
+MECHANICAL = 0.40     # best_score <= 40%: the structure is found, keep adjusting
+STALL_ATTEMPTS = 10   # attempts (every agent's) after which a far-off best counts as stuck
+STAGES = ("fresh", "structural", "mechanical", "near_miss", "escalated")
+
+
+def stage(best_score: int | None, n_insns: int | None, attempts: int | None = 0) -> str:
+    """fresh (nothing compiled yet), structural (far off), mechanical, near_miss, or escalated (far off after
+    STALL_ATTEMPTS attempts)."""
+    if best_score is None:
+        return "fresh"
+    frac = float(best_score) / (max(int(n_insns or 0), 1) * 100)
+    if int(attempts or 0) >= STALL_ATTEMPTS and frac > MECHANICAL:
+        return "escalated"
+    return "near_miss" if frac <= NEAR_MISS else "mechanical" if frac <= MECHANICAL else "structural"
+
+
 PENALTY_STACKDIFF = 1
 PENALTY_REGALLOC = 5
 PENALTY_OPERAND = 10
@@ -31,6 +51,12 @@ _CS = {
     ("ppc", True): (capstone.CS_ARCH_PPC, capstone.CS_MODE_32 | capstone.CS_MODE_BIG_ENDIAN),
     ("arm", False): (capstone.CS_ARCH_ARM, capstone.CS_MODE_ARM),
     ("thumb", False): (capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB),
+    # Sharp LR35902: capstone has no back end for it, so the fork decodes it itself (rom/sm83.py)
+    ("sm83", False): ("sm83", 0),
+    # Zilog Z80 (Master System, Game Gear): no capstone back end either, so rom/z80.py decodes it
+    ("z80", False): ("z80", 0),
+    # MOS 6502 (NES): rom/mos6502.py decodes it, so the sweep and the scoring read the same instruction forms
+    ("mos6502", False): ("mos6502", 0),
 }
 
 _REG = re.compile(
@@ -61,16 +87,11 @@ def percent_text(p: float | None) -> str:
 
 
 def disassemble(fn: FunctionObj) -> list[Insn]:
-    if fn.arch == "sm83" and not fn.big_endian:
-        from .rom import sm83
-
-        md = sm83.Decoder()
-    elif fn.arch == "z80" and not fn.big_endian:
-        from .rom import z80
-
-        md = z80.Decoder()
+    arch, mode = _CS[(fn.arch, fn.big_endian)]
+    if arch in ("sm83", "z80", "mos6502"):  # our own decoders, capstone-shaped
+        from .rom import mos6502, sm83, z80
+        md = {"sm83": sm83, "z80": z80, "mos6502": mos6502}[arch].Decoder()
     else:
-        arch, mode = _CS[(fn.arch, fn.big_endian)]
         md = capstone.Cs(arch, mode)
     md.detail = True
     md.skipdata = True

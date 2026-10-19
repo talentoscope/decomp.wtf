@@ -71,6 +71,17 @@ def report(project: Path, out: Path) -> dict:
 
 
 @dataclass
+class TableMismatch:
+    target: str
+    base: str
+    percent: float
+
+    def describe(self) -> str:
+        return (f"jump-table data {self.target} -> {self.base} matches {self.percent:g}%; "
+                "check every table entry, not just the first loaded word")
+
+
+@dataclass
 class FunctionDiff:
     symbol: str | None
     match_percent: float | None  # None: the function isn't in the base object (not written yet)
@@ -82,7 +93,9 @@ class FunctionDiff:
     # (original, yours) symbol names of references that point at differently named things: objdiff's rules accept
     # them, but the game's link resolves names, so they're worth fixing before the code goes upstream
     renamed: list[tuple[str, str]] = field(default_factory=list)
-    literals: list = field(default_factory=list)  # literals.Mismatch: constants that differ although the code matches
+    literals: list = field(default_factory=list)  # literals.Mismatch or TableMismatch: referenced data differs
+
+    data_pairs: list[dict] = field(default_factory=list)  # objdiff's unit-level data symbol pairings
 
     @property
     def matched(self) -> bool:
@@ -92,7 +105,7 @@ class FunctionDiff:
         if not self.literals:
             return ""
         listing = "\n".join(f"- {m.describe()}" for m in self.literals[:6])
-        return ("NOT A MATCH YET: every instruction matches, but constants it loads differ from the original's:\n"
+        return ("NOT A MATCH YET: every instruction matches, but constants or jump-table data differ from the original's:\n"
                 f"{listing}\nWrite the literal with the original's value (float vs double, the exact digits).")
 
     def target_asm(self) -> str:
@@ -101,8 +114,18 @@ class FunctionDiff:
     def render(self, context: int = 2, max_rows: int = 60) -> str:
         from ..scoring import render_rows
 
-        return render_rows(self.rows, context, max_rows, legend="markers: |=different instruction i=operand differs "
+        text = render_rows(self.rows, context, max_rows, legend="markers: |=different instruction i=operand differs "
                            "<=missing (target only) >=extra (yours only)")
+        tables = [p for p in self.data_pairs if re.match(r"(?i)(?:jtbl|jpt|jump_table)[_$]?", p["target"])]
+        if tables:
+            text += "\nUnit jump-table data pairing (separate from this function's code score):\n"
+            text += "\n".join(
+                f"- {p['target']} -> {p['base'] or 'unpaired'}: "
+                + (f"{p['match_percent']:g}%" if p["match_percent"] is not None else "not measured")
+                for p in tables[:8])
+            if any(p["base"] is None for p in tables):
+                text += "\nUnpaired labels are not zero-filled data. Check the unit's symbol mappings and data layout."
+        return text
 
 
 def _sym(obj: dict | None, name: str) -> dict | None:
@@ -110,6 +133,29 @@ def _sym(obj: dict | None, name: str) -> dict | None:
         if s.get("name") == name:
             return s
     return None
+
+
+def _paired(left: dict, right: dict | None) -> dict | None:
+    """Use objdiff's target-to-base index, including zero; never guess after an explicit invalid pairing."""
+    symbols = (right or {}).get("symbols", [])
+    if "target_symbol" in left:
+        index = left["target_symbol"]
+        return symbols[index] if type(index) is int and 0 <= index < len(symbols) else None
+    # Older report fixtures omit indices. Same-name pairing remains compatible with those reports.
+    return _sym(right, left.get("name"))
+
+
+def data_pairings(data: dict) -> list[dict]:
+    """Data rows retain their real pairing and score; absent rows never mean an all-zero section."""
+    result = []
+    for symbol in (data.get("left") or {}).get("symbols", []):
+        if symbol.get("kind") != "SYMBOL_OBJECT" or symbol.get("instructions"):
+            continue
+        other = _paired(symbol, data.get("right"))
+        result.append({"target": symbol["name"], "base": other["name"] if other else None,
+                       "size": int(symbol.get("size") or 0),
+                       "match_percent": float(symbol["match_percent"]) if other and symbol.get("match_percent") is not None else None})
+    return result
 
 
 def _fmt(row: dict) -> str:
@@ -158,7 +204,8 @@ def diff(target: Path | None, base: Path | None, symbol: str | None, cwd: Path, 
         if base is not None and base.exists():
             args += ["-2", str(base)]
     data = json.loads(_run([*args, *([symbol] if symbol else [])], cwd=cwd, timeout=120))
-    left, right = _sym(data.get("left"), symbol), _sym(data.get("right"), symbol)
+    left = _sym(data.get("left"), symbol)
+    right = _paired(left, data.get("right")) if left else None
     if left is None and symbol is not None:
         raise ObjdiffError(f"{symbol} isn't in the target object")
     left = left or {}
@@ -175,9 +222,8 @@ def diff(target: Path | None, base: Path | None, symbol: str | None, cwd: Path, 
         right = None
     if right is not None and pct is None:
         pct = 100.0 if all(m == " " for m, _, _ in rows) else 0.0
-    built = {s.get("name") for s in (data.get("right") or {}).get("symbols", [])}
     funcs = [s for s in (data.get("left") or {}).get("symbols", []) if s.get("kind") == "SYMBOL_FUNCTION"]
-    scores = {s["name"]: (float(s["match_percent"]) if s.get("match_percent") is not None and s["name"] in built else None)
+    scores = {s["name"]: (float(s["match_percent"]) if s.get("match_percent") is not None and _paired(s, data.get("right")) is not None else None)
               for s in funcs}
     order = [s["name"] for s in sorted(funcs, key=lambda s: int(s.get("address") or 0))]
     ops = {s["name"]: [r["instruction"]["formatted"].split(None, 1)[0] for r in s.get("instructions", [])
@@ -193,6 +239,12 @@ def diff(target: Path | None, base: Path | None, symbol: str | None, cwd: Path, 
             if ins.get("formatted"):
                 insns.append((at, ins["formatted"].split(None, 1)[0]))
             at += int(ins.get("size") or 4)
-        wrong = literals.mismatches(target, base, symbol, insns)
+        wrong = literals.mismatches(target, base, symbol, insns, base_symbol=right["name"] if right else None)
+    pairs = data_pairings(data)
+    if pct is not None and float(pct) >= 100.0 and right is not None:
+        references = {_reloc_name(data.get("left"), row) for row in lrows}
+        wrong += [TableMismatch(p["target"], p["base"], p["match_percent"]) for p in pairs
+                  if p["target"] in references and re.match(r"(?i)(?:jtbl|jpt|jump_table)[_$]?", p["target"])
+                  and p["base"] is not None and p["match_percent"] is not None and p["match_percent"] < 100.0]
     return FunctionDiff(symbol, float(pct) if pct is not None else None, rows, int(left.get("size", 0)), scores, order, ops,
-                        renamed, wrong)
+                        renamed, wrong, pairs)

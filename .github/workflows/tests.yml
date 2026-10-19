@@ -1,0 +1,34 @@
+name: Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          python-version: '3.12'
+      - run: uv sync --locked
+      # real problems only (see pyproject.toml): undefined or unused names, syntax errors
+      - run: uvx ruff@0.14.0 check src tests
+      - run: node --check src/decompnet/app/static/app.js
+      - run: node --check src/decompnet/app/static/sms-profile.js
+      # compilers and emulator-side tools aren't installed here: the tests that need them skip themselves
+      - run: uv run pytest -q -p no:cacheprovider

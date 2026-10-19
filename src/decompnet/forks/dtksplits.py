@@ -26,12 +26,13 @@ class SectionSplit:
     name: str
     start: int
     end: int
-    extra: str = ""  # anything after a range (align:, rename:...), kept as is
+    extra: str = ""  # anything after this range (align:, rename:...), kept as is
 
 
 @dataclass
 class FileSplit:
     name: str  # path relative to the source directory, as splits.txt names it
+    # One input section may have several ranges with different linker priorities (rename:.dtors$10/$15).
     sections: list[SectionSplit] = field(default_factory=list)
     attrs: list[str] = field(default_factory=list)  # other lines of the entry (comment:, ...)
 
@@ -58,8 +59,7 @@ class Splits:
                 continue
             r = _RANGE.match(line)
             if r:
-                cur.sections.append(SectionSplit(r.group(1), int(r.group(2), 16), int(r.group(3), 16),
-                                                 r.group(4).strip()))
+                cur.sections.append(SectionSplit(r.group(1), int(r.group(2), 16), int(r.group(3), 16), r.group(4).strip()))
             elif line.strip():
                 cur.attrs.append(line)
         while header and not header[-1].strip():

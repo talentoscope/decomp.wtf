@@ -203,7 +203,7 @@ def jump_target(code: bytes, addr: int) -> int | None:
 
 
 def is_return(text: str) -> bool:
-    return flow(text)[0] in ("ret", "jump")
+    return text in ("ret", "reti") or text.startswith(("ret ", "jp hl", "jr "))
 
 
 def flow(text: str) -> tuple[str, int | None]:

@@ -26,6 +26,7 @@
     <div class="nav-projects" id="navProjects"><p class="nav-empty">None yet: drop in a game.</p></div>
     <p class="nav-label">Explore</p>
     <a class="nav-item" href="#/catalog" data-route="catalog"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h5v4H2zm7 0h5v4H9zM2 9h5v4H2zm7 0h5v4H9z"/></svg>Public decomps</a>
+    <a class="nav-item" href="#/rooms" data-route="rooms"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2.5h12v3H2zm0 4.5h12v3H2zm0 4.5h7v2.5H2z"/></svg>Open rooms</a>
     <button class="nav-item" id="navJoin" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 7a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Zm5.5 0a2 2 0 1 1 0-4 2 2 0 0 1 0 4ZM1 13c0-2.4 2-4 4.5-4S10 10.6 10 13v1H1v-1Zm10.5 1v-1c0-1.3-.4-2.4-1.1-3.3.2 0 .4-.1.6-.1 2.2 0 4 1.3 4 3.4v1h-3.5Z"/></svg>Join a team</button>
   </div>
   <div class="nav-foot">
@@ -70,7 +71,7 @@
         <p class="muted small">ROM, disc image or program file · or <span class="link">choose a file</span></p>
         <div class="plat-row" id="platRow"><span data-p="gc">GameCube</span><span data-p="wii">Wii</span><span data-p="n64">N64</span><span data-p="psx">PS1</span><span data-p="ps2">PS2</span><span data-p="gba">GBA</span><span data-p="nds">DS</span></div>
         <p class="plat-legend muted small" id="platLegend" hidden><span class="rec-mark">★</span> recommended: the most tested path to a full decomp you can port and mod · the rest are beta</p>
-        <button class="link-btn" id="pathPick" type="button">Big disc? Use its path instead</button>
+        <button class="link-btn" id="pathPick" type="button">Use a local disc or CUE path</button>
       </div>
       <div class="drop-picked" id="dropPicked" hidden>
         <div class="rom-card">
@@ -105,7 +106,7 @@
           <button class="primary" id="errBack" type="button">Try another file</button>
           <button class="ghost" id="errCopy" type="button">Copy for a bug report</button>
           <a class="ghost btn" id="errLogLink" href="/api/log" target="_blank" rel="noopener">The full log</a>
-          <a class="ghost btn" href="https://github.com/i12bp8/decomp.wtf/issues/new" target="_blank" rel="noopener">Report it</a>
+          <a class="ghost btn" href="https://github.com/SynapticDreams/decomp.wtf/issues/new" target="_blank" rel="noopener">Report it</a>
         </div>
       </div>
     </div>
@@ -157,6 +158,23 @@
   <div class="chips" id="catChips" role="tablist" aria-label="Platform"></div>
   <div class="cat-grid" id="catGrid"></div>
   <p class="muted small cat-note" id="catNote"></p>
+</main>
+
+<!-- ================================================================ open rooms -->
+<main id="rooms" class="view" hidden>
+  <header class="page-head">
+    <p class="eyebrow">Decompile together</p>
+    <h1>Open rooms</h1>
+    <p class="muted">Public rooms their hosts listed: join one with your own copy of its game, and your agents work with everyone in it. The list shows each game's platform and product code; a game you have here shows with its title. The list lives on GitHub (<a id="roomsRepo" href="#" target="_blank" rel="noopener"></a>), where hosts list their rooms; decomp.wtf checks each room when you join it.</p>
+  </header>
+  <div class="cat-tools" id="roomsTools">
+    <input id="roomsSearch" class="search" type="search" placeholder="Search product codes and notes" aria-label="Search rooms">
+    <label class="check inline"><input type="checkbox" id="roomsMine"><span>Only games I have</span></label>
+    <button class="ghost small-btn" id="roomsRefresh" type="button">Refresh</button>
+  </div>
+  <div class="chips" id="roomsChips" role="tablist" aria-label="Platform"></div>
+  <div class="cat-grid" id="roomsGrid"></div>
+  <p class="muted small cat-note" id="roomsNote"></p>
 </main>
 
 <!-- ================================================================ a project -->
@@ -235,7 +253,7 @@
     <section class="panel map-panel">
       <header class="panel-head">
         <h2 id="mapTitle">ROM map</h2>
-        <div class="legend"><span><i class="sw open"></i>to do</span><span><i class="sw tried"></i>tried</span><span><i class="sw work"></i>working</span><span><i class="sw match"></i>matched</span><span><i class="sw stuck"></i>stuck</span></div>
+        <div class="legend"><span><i class="sw open"></i>to do</span><span><i class="sw tried"></i>tried</span><span><i class="sw work"></i>working</span><span><i class="sw match"></i>matched</span><span><i class="sw stuck"></i>stuck</span><span id="legendDoc" hidden><i class="sw doc"></i>documented</span><span id="legendAsm" hidden><i class="sw tried aside"></i>set aside</span></div>
       </header>
       <p class="muted small map-hint" id="mapHint">every square is a function, in ROM order</p>
       <div class="map-wrap" id="mapWrap">
@@ -255,6 +273,18 @@
         <ol class="mini-list board" id="board"></ol>
       </section>
     </div>
+
+    <div class="cols">
+      <section class="panel">
+        <header class="panel-head"><h2>Getting closer</h2><svg class="bars mini" id="closerBars" viewBox="0 0 240 20" preserveAspectRatio="none" aria-label="Closeness gained per hour, last 24 hours"></svg></header>
+        <p class="muted small pad-x" id="closerSub"></p>
+        <ol class="mini-list" id="closerList"></ol>
+      </section>
+      <section class="panel">
+        <header class="panel-head"><h2>Which setup works best</h2></header>
+        <div class="pad-x" id="setups"></div>
+      </section>
+    </div>
   </section>
 
   <!-- functions -->
@@ -262,6 +292,7 @@
     <div class="list-tools">
       <input id="fnSearch" class="search" type="search" placeholder="Find a function, address or file  ( / )" aria-label="Find a function" autocomplete="off" spellcheck="false">
       <div class="seg" id="fnFilter" role="radiogroup" aria-label="Show"></div>
+      <label class="check inline" id="fnHideAsmBox" title="Assembly no compiler makes, and data the split took for code: out of agents' way" hidden><input type="checkbox" id="fnHideAsm" checked><span>Hide assembly and data<span id="fnHideAsmN"></span></span></label>
     </div>
     <div class="fn-table-wrap">
       <table class="fn-table">
@@ -284,7 +315,9 @@
           <div class="launcher" id="launcher"></div>
         </section>
         <section class="panel">
-          <header class="panel-head"><h2>Working on this project <span class="muted small" id="spendLine"></span></h2><button class="ghost small-btn" id="stopAll" type="button" hidden>Stop all</button></header>
+          <header class="panel-head"><h2>Working on this project <span class="muted small" id="spendLine"></span></h2><span class="head-btns"><button class="ghost small-btn" id="removeAll" type="button" hidden>Remove all</button>
+            <button class="ghost small-btn" id="disconnectAll" type="button" hidden>Disconnect all</button>
+            <button class="ghost small-btn" id="stopAll" type="button" hidden>Stop all</button></span></header>
           <div id="sessions" class="sessions"></div>
           <p class="empty muted small" id="noSessions">No agent is working on this project yet.</p>
         </section>
@@ -339,7 +372,7 @@
       <div class="pad">
         <p id="srcText"></p>
         <div class="src-state" id="srcState"></div>
-        <div class="row"><button class="primary" id="srcExport" type="button">Export project</button><button class="ghost" id="srcOpen" type="button">Open folder</button></div>
+        <div class="row"><button class="primary" id="srcExport" type="button">Export project</button><button class="ghost" id="srcDiscExport" type="button" hidden>Build disc image</button><button class="ghost" id="srcOpen" type="button">Open folder</button></div>
         <pre class="joblog tall" id="expLog" hidden></pre>
         <div id="expResult"></div>
       </div>
@@ -352,10 +385,16 @@
       <section class="panel" id="compilerPanel">
         <header class="panel-head"><h2>Compiler</h2></header>
         <div class="pad">
-          <p class="muted small">Every function is built with this compiler and these flags. If almost nothing matches, the game was probably built with another compiler or flags.</p>
+          <p class="muted small">Choose the project default or override one source unit. Existing matches are checked before a change is saved.</p>
+          <label class="field"><span>Applies to</span><select id="setCompilerUnit"><option value="">Project default</option></select></label>
           <label class="field"><span>Compiler</span><select id="setTc"></select></label>
           <label class="field"><span>Flags</span><input id="setFlags" class="mono"></label>
-          <div class="row"><button class="primary small-btn" id="setTcSave" type="button">Save</button><button class="ghost small-btn" id="setTcReset" type="button">Default flags</button></div>
+          <div id="smallDataPanel" hidden><button class="ghost small-btn" id="smallDataInspect" type="button">Inspect small data</button><div id="smallDataResult"></div></div>
+          <label class="field" id="setAspsxField" hidden><span>Assembler</span><select id="setAspsx"><option value="">Bundled GNU assembler</option><option>1.05</option><option>2.21</option><option>2.34</option><option>2.56</option><option>2.67</option><option>2.77</option><option>2.79</option><option>2.81</option><option>2.86</option></select><small class="muted">ASPSX emulation needs maspsx and MIPS binutils from Compilers &amp; tools.</small></label>
+          <div class="row"><button class="primary small-btn" id="setTcSave" type="button">Save</button><button class="ghost small-btn" id="compilerDiagnostic" type="button" hidden>Compare compiler passes</button><button class="ghost small-btn" id="setTcReset" type="button">Default flags</button><button class="ghost small-btn" id="setUnitReset" type="button" hidden>Use project default</button></div>
+          <div id="compilerProbePanel" hidden><p class="muted small">Compare installed compiler settings against small functions in the selected unit. With Project default selected, the resident code is sampled. Results suggest settings for review.</p><div class="row"><button class="ghost small-btn" id="compilerProbe" type="button">Compare settings</button><label class="check"><input id="compilerProbeExpanded" type="checkbox"><span>More samples</span></label></div><pre class="mono small" id="compilerProbeLog" hidden></pre><div id="compilerProbeResult"></div></div>
+          <div id="psxDebugPanel" hidden><h3>Debug information</h3><p class="muted small">Preview SYM, MAP and CPE files for the selected unit. Names become aliases; type proposals appear in function briefs. CPE load bytes must match this image.</p><input id="psxDebugFiles" type="file" accept=".sym,.map,.cpe" multiple><button id="psxDebugPreview" class="ghost small-btn" type="button">Preview</button><button id="psxDebugApply" class="ghost small-btn" type="button">Apply aliases and evidence</button><pre id="psxDebugResult" class="mono small"></pre></div>
+          <div id="psyqPanel" hidden><h3>PSY-Q libraries</h3><p class="muted small">Choose signature JSON files you have permission to use. Files stay local and are reused for future PS1 imports. Preview the recognized labels, then apply them to name library functions and set them aside from agents.</p><label class="field"><span>SDK version</span><input id="psyqVersion" placeholder="e.g. 440"></label><label class="field"><span>Signature files</span><input id="psyqFiles" type="file" accept=".json" multiple></label><div class="row"><button class="ghost small-btn" id="psyqScan" type="button">Scan local signatures</button><button class="ghost small-btn" id="psyqApply" type="button">Apply recognized libraries</button></div><pre class="mono small" id="psyqLog" hidden></pre><div id="psyqResult"></div></div>
         </div>
       </section>
       <section class="panel">
@@ -376,6 +415,29 @@
     <section class="panel danger-zone">
       <header class="panel-head"><h2>Start from scratch</h2></header>
       <div class="pad row"><p class="muted small grow">Clear matches, compile history, notes, and saved agent sessions. Imported layout, symbols, headers, and project settings are kept.</p><button class="ghost danger" id="resetProgressBtn" type="button">Start from scratch…</button></div>
+    </section>
+    <section class="panel" id="smsProfilePanel" hidden></section>
+    <section class="panel" id="resplitPanel" hidden>
+      <header class="panel-head"><h2>Split the game again</h2></header>
+      <div class="pad">
+        <p class="muted small">Find the game's functions again with this version's splitter. A function whose start, address and bytes don't change keeps everything; matched functions are always kept; notes on a function that goes move to the function that covers its place now. Stop the project's helpers before you apply it.</p>
+        <div class="row"><button class="ghost small-btn" id="resplitPreview" type="button">See what would change</button><button class="primary small-btn" id="resplitApply" type="button" hidden>Split again</button></div>
+        <pre class="joblog" id="resplitLog" hidden></pre>
+        <div id="resplitResult"></div>
+      </div>
+    </section>
+    <section class="panel" id="correctionsPanel" hidden>
+      <header class="panel-head"><h2 id="corrTitle">Corrections to the split</h2></header>
+      <div class="pad">
+        <p class="muted small" id="corrIntro">What agents found the split got wrong about the game's code and data, with how they know. Splitting the game again uses them: undo any you don't agree with first.</p>
+        <div id="correctionsList"></div>
+        <h3 class="sub" id="symHead">Symbol file</h3>
+        <p class="muted small" id="symText">A symbol file of your choosing (<code>bank:address Name</code> lines, as RGBDS, BGB, mgbdis and WLA-DX write them) names this project's functions, now and when the game is split again. It stays with this project and is never shared, and only its well-formed lines are kept.</p>
+        <div class="row" id="symRow"><label class="ghost small-btn file-btn">Import a symbol file…<input type="file" id="symFile" accept=".sym,.txt" hidden></label><span class="muted small grow" id="symStatus"></span><button class="ghost small-btn" id="symRemove" type="button" hidden>Remove it</button></div>
+        <h3 class="sub" id="covHead">Coverage from an emulator</h3>
+        <p class="muted small" id="covText">Play your copy of the game in an emulator that logs what runs, then import the log: a Mesen2 code/data log (<code>.cdl</code>, from its Code/Data Logger; FCEUX's too, for an NES game) or an execution trace (<code>bank:address</code> lines; Game Boy and Master System). Splitting the game again follows the code it saw run, and shows what it saw read as data. The more of the game you play, the more it finds.</p>
+        <div class="row" id="covRow"><label class="ghost small-btn file-btn">Import coverage…<input type="file" id="covFile" accept=".cdl,.trace,.txt,.log" hidden></label><span class="muted small grow" id="covStatus"></span><button class="ghost small-btn" id="covRemove" type="button" hidden>Remove it</button></div>
+      </div>
     </section>
     <section class="panel danger-zone">
       <header class="panel-head"><h2>Remove project</h2></header>
@@ -429,6 +491,10 @@
       </div>
       <div class="row">
         <span class="badge" id="fnStatus"></span>
+        <button class="ghost small-btn" id="fnWork" type="button" title="One helper on this function only, getting it closer until it matches">Work on this</button>
+        <button class="ghost small-btn" id="fnGiveBack" type="button" hidden>Back to agents</button>
+        <button class="ghost small-btn" id="fnLooksRight" type="button" hidden>Looks right</button>
+        <button class="ghost small-btn" id="fnSendBack" type="button" hidden>Send back…</button>
         <button class="ghost small-btn pin" id="fnPin" type="button" title="Agents take this function next">★ Next</button>
         <button class="ghost small-btn" id="fnUnlock" type="button" hidden title="Agents gave up on this function after 10 attempts without improvement. Let them claim it again.">🔓 Unlock</button>
         <button class="ghost icon" id="fnPrev" type="button" aria-label="Previous function" title="Previous function (K)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.3 2.7 11.4 3.8 7.2 8l4.2 4.2-1.1 1.1L5 8z"/></svg></button>
@@ -485,6 +551,7 @@
 </div>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="/assets/sms-profile.js"></script>
 <script src="/assets/app.js"></script>
 </body>
 </html>

@@ -22,8 +22,9 @@ its own disassembler (`decompnet.rom.sm83`) and reads cartridges through `mgbdis
   them. Code nothing reached but that reads like code is still split as before, and followed when it
   calls two functions that were reached.
 
-- Matching uses the pinned GBDK-2020 4.5.0 toolchain for every candidate; the importer does not identify the
-  original compiler or prove that a routine was written in C. Hand-written code may simply fail to match.
+- The import reads which toolchain built the game from its start-up code (GBDK's, version by version). A game
+  GBDK built is C, and its version says whether the pinned GBDK-2020 4.5.0 writes the same code; one no compiler
+  built is assembly, for the assembly track.
 
 ## The matching lane
 
@@ -42,9 +43,10 @@ scores the result with the same judge as every other platform.
 An `rst` call with a byte after it is `void func_000_0028(void) __z88dk_shortcall(0x28, 0);` then `func_000_0028();`, which
 builds to `rst $28` and the byte `0x00` (the second number is the byte that follows).
 
-The importer installs GBDK-2020 when possible. If it is unavailable, functions are still disassembled and
-searchable but remain read-only because no candidate can be judged. Install GBDK-2020 and select it as the
-project compiler to make those functions available for matching.
+**Until the toolchain is installed**, a `.gb`/`.gbc` project is imported **read-only**: every function
+is disassembled, searchable and briefable, but functions are not handed out for matching, because no
+candidate could be judged yet. That is deliberate — it is the honest state rather than distributing
+work nobody can score. Importing the game again (or installing GBDK-2020 from Setup) turns the lane on.
 
 ## What moves SDCC's output
 
@@ -58,18 +60,34 @@ name) so the next session starts ahead:
   another way may need `--opt-code-size` or `--opt-code-speed` (the project's compiler flags): if a function's loops or
   jumps come out in a different shape from the target, try those before rewriting, and say what worked in a note.
 
-## Split limits and export
+## Games written in assembly
 
-When available, `mgbdis` plus RGBDS produces a faithful bank-aware split and verifies the ROM rebuild. Otherwise
-the built-in sweep is used; it is approximate and may miss code or include data as code. Function boundaries can
-be corrected with `split_function` when a single candidate contains two functions. Imported data regions and
-function starts are carried into the export as `.data` and `.code` blocks.
+Most Game Boy games are hand-written assembly, and SDCC matches only the parts of them it could have written. The app
+sets the rest aside (status *assembly* or *not code*, with the reason): padding, graphics or tables the split took for
+a function, routines that run on into the next one, code that reads a flag its caller left. A routine the split ran
+on past its end is cut to it. If a function you're given looks like one of those, say so in a note and release it.
 
-Most commercial Game Boy games contain assembly that GBDK-2020 cannot reproduce from C. A non-matching score is
-not proof that the split is wrong. The current matching workflow judges C candidates; it does not provide an
-in-app RGBDS assembly-editing track. Export creates an RGBDS project from the current split and names, keeps
-matched C as reference, and checks that the unmodified project rebuilds byte for byte. It is a starting point for
-external assembly work, translations and ports, not an in-app assembly matching workflow.
+A routine set aside as hand-written is decompiled on the **assembly track** instead: `claim_function(track="asm")`
+and document it in RGBDS assembly that rebuilds its bytes, with names instead of addresses (guide topic `asm`).
+
+The split's boundaries can be wrong both ways. When a function you're given is two routines (one ends, the next
+starts), `split_function(function, at=<CPU address where the second starts>)` cuts it. When it's half of one (it runs
+on into the next function or jumps into it, or the one before runs on into it, and nothing else calls the second
+half), `merge_function(function)` joins them. Each piece is checked again for what's set aside.
+
+When the split took data for code, missed a function, or decoded the bytes after a call as instructions, say so with
+`correct_split(kind, at, reason, count)`, with how you know (what reads it, what calls it, what it holds):
+
+- `data`: `count` bytes at `at` aren't code (a table, graphics, text). `read_data` shows them first.
+- `code`: a function starts at `at` (reached through a pointer the split can't follow).
+- `table`: `count` handler addresses at `at` (a jump table nothing found).
+- `operands`: the routine at `at` reads `count` bytes after each call to it and returns past them (`pop hl / ld
+  a,(hl+) / ... / push hl / ret`, or a far call followed by its bank and address).
+- `noreturn`: the routine at `at` never returns (a main loop, a reset).
+
+`at` is a function's name, `NN:AAAA` (bank and address, hex) or an address in `function`'s bank. A correction doesn't
+change anything at once: the next time a person splits the game again it does, and they can undo it first. Ten an
+hour at most: they aren't a way round a hard function.
 
 What SDCC does write in such a game, and how (each matched on a real cartridge):
 
@@ -85,7 +103,7 @@ What it doesn't: a loop counted in `b` where SDCC picks `c`, `ld a, n` then `ld 
 
 ## Conventions
 
-- `func_NNN_XXXX` automatic function names include the bank and CPU address; `D_`/`B_` name data by address.
-  Keep the split's names unless a function's purpose is clear.
+- `bankNNN_XXXX` style automatic names, `D_`/`B_` for data by address; keep the split's names unless a
+  function's purpose is clear.
 - Helper types and prototypes that several functions share go in the project's shared header
   (`get_context`), never edited per function to force a match.

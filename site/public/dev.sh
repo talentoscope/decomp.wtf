@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# decomp.wtf's dev branch, for testing what isn't released yet (Linux):
+# decomp.wtf's development branch, for testing what isn't released yet (Linux):
 #
-#   curl -fsSL https://decomp.wtf/dev.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/SynapticDreams/decomp.wtf/main/site/public/dev.sh | bash
 #
-# Runs the dev branch's own installer (install.sh on GitHub) with DECOMP_BRANCH=dev: decomp.wtf installs from the
+# Runs main's installer by default, or the branch selected with DECOMP_BRANCH. decomp.wtf installs from the
 # branch's newest commit, and the app then offers every new commit pushed there as an update (one click).
-# Back to releases: curl -fsSL https://decomp.wtf/install.sh | bash
+# Back to releases: curl -fsSL https://github.com/SynapticDreams/decomp.wtf/releases/latest/download/install.sh | bash
 set -euo pipefail
-BRANCH="${DECOMP_BRANCH:-dev}"
-curl -fsSL "https://raw.githubusercontent.com/i12bp8/decomp.wtf/$BRANCH/site/public/install.sh" | DECOMP_BRANCH="$BRANCH" bash -s -- "$@"
+BRANCH="${DECOMP_BRANCH:-main}"
+curl -fsSL "https://raw.githubusercontent.com/SynapticDreams/decomp.wtf/$BRANCH/site/public/install.sh" | DECOMP_BRANCH="$BRANCH" bash -s -- "$@"

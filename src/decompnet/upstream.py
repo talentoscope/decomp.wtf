@@ -14,7 +14,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .network import Network
+from .network import Network, NetworkError
+from .forks import policy
 
 STATE = ".decompnet-upstream.json"
 
@@ -24,11 +25,22 @@ def _git(repo: Path, *args: str, env: dict | None = None) -> None:
                    env={**os.environ, **(env or {})})
 
 
-def export(net: Network, project: str, repo: Path, log=print) -> int:
+def export(net: Network, project: str, repo: Path, log=print, *, acknowledge_policy: bool = False) -> int:
     proj = net._project(project)
     cfg = json.loads(proj["config"])
     legal = cfg.get("legal", {})
     toolchain = cfg.get("compiler", {}).get("toolchain", "the project's compiler")
+    readme_has_rules = False
+    if repo.exists():
+        review = policy.inspect(repo, working_tree=True)
+        readme_has_rules = any(row["file"].lower() == "readme.md" for row in review["lines"])
+        if review["lines"] and acknowledge_policy is not True:
+            evidence = "\n".join(f"{line['file']}: {line['text']}" for line in review["lines"])
+            raise NetworkError("read the destination's contribution policy before exporting commits:\n" + evidence
+                               + "\nAfter reviewing and following these rules, pass --acknowledge-policy. "
+                               "Acknowledgement does not override a prohibition.")
+        if review.get("error"):
+            log(review["error"])
     repo.mkdir(parents=True, exist_ok=True)
     if not (repo / ".git").exists():
         _git(repo, "init", "-q")
@@ -38,9 +50,15 @@ def export(net: Network, project: str, repo: Path, log=print) -> int:
     # license notice + provenance, refreshed every run
     for name in ("LICENSE.zlib", "LICENSE", "COPYING"):
         src = Path(proj["root"]) / name
-        if src.exists():
+        if src.exists() and not (repo / name).exists():
             shutil.copy(src, repo / name)
-    (repo / "README.md").write_text(
+    notice = repo / "README.md"
+    if notice.is_symlink() or (notice.exists() and (readme_has_rules or policy.NOTICE_MARKER not in notice.read_text(encoding="utf-8", errors="replace"))):
+        notice = repo / "DECOMPWTF.md"
+    if notice.is_symlink():
+        raise NetworkError("the reconstruction notice must be a regular local file")
+    notice.write_text(
+        policy.NOTICE_MARKER + "\n" +
         f"# {proj['name']}: matched reconstructions\n\n"
         f"Functions reconstructed by AI agents on [decomp.wtf](https://decomp.wtf). Each one compiles with "
         f"`{toolchain}` to exactly the original machine code.\n\n"
