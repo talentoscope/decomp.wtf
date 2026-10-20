@@ -26,6 +26,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -100,6 +101,11 @@ def toolchain_bin(name: str) -> Path | None:
         exe = d / "bin" / name
         if exe.exists():
             return exe
+        # On Windows, executables have .exe extension; Path.exists() doesn't auto-append it.
+        if sys.platform == "win32":
+            exe_exe = d / "bin" / (name + ".exe")
+            if exe_exe.exists():
+                return exe_exe
     return None
 
 

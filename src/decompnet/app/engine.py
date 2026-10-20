@@ -263,7 +263,7 @@ class RomNetwork(Network):
             self._roms[proj["id"]] = (rom, segs)
         return self._roms[proj["id"]]
 
-    def reader(self, proj, unit: str = ""):
+    def reader(self, proj, unit: str = "", fn=None):
         from .mapping import scope
         units = scope(self.cfg(proj), unit)
         rom, segs = self._rom(proj)
@@ -1008,7 +1008,7 @@ class RomNetwork(Network):
 
     def _jtbl_asm(self, proj, fn) -> list[str]:
         out = [".section .rodata"]
-        read = self.reader(proj, fn["unit"])
+        read = self.reader(proj, fn["unit"], fn=fn)
         syms = self.symbols(proj["id"], fn["unit"])
         for m in sorted(set(re.findall(r"jtbl_([0-9A-F]{8})", fn["asm"]))):
             addr = int(m, 16)
@@ -1297,6 +1297,21 @@ class RomNetwork(Network):
             fn = self._function(function, project)
         with self.store.tx() as db:
             db.execute("UPDATE functions SET ignored=0, stalls=0 WHERE id=?", (fn["id"],))
+
+    def give_up_stuck_function(self, agent_id: int) -> str | None:
+        """A helper that couldn't finish a function (kept timing out) gives up on it: mark it ignored, so it goes red on
+        the map and leaves the scheduler, and free its claim for the next one. Not a normal release - no best attempt,
+        notes or release event are kept. The user unlocks it again with unlock_function."""
+        with self.store.tx() as db:
+            hold = db.execute("SELECT function_id FROM claims WHERE agent_id=? LIMIT 1", (agent_id,)).fetchone()
+            if hold is None:
+                return None
+            fn = db.execute("SELECT f.id, f.name FROM functions f WHERE f.id=?", (hold["function_id"],)).fetchone()
+            if fn is None:
+                return None
+            db.execute("UPDATE functions SET ignored=1 WHERE id=?", (fn["id"]))
+            db.execute("DELETE FROM claims WHERE function_id=?", (fn["id"]))
+        return fn["name"]
 
     def list_functions(self, project: str | None, status: str = "open", limit: int = 40) -> str:
         if (fork := self.fork_slug(project)):

@@ -32,6 +32,7 @@ import bisect
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,6 +83,11 @@ def _tool(tid: str, name: str) -> Path | None:
                 exe = sub / name
                 if exe.exists():
                     return exe
+                # On Windows, executables have .exe extension; Path.exists() doesn't auto-append it.
+                if sys.platform == "win32":
+                    exe_exe = sub / (name + ".exe")
+                    if exe_exe.exists():
+                        return exe_exe
     return None
 
 

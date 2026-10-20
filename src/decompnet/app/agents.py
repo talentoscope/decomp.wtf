@@ -1635,8 +1635,16 @@ class Manager:
                     return True
                 for _attempt in range(4):
                     used = fit(messages, budget)
-                    r = _post(s, client, f"{base}/chat/completions", headers=headers,
-                              json={"model": model, "messages": messages, "tools": schema, "tool_choice": "auto"})
+                    try:
+                        r = _post(s, client, f"{base}/chat/completions", headers=headers,
+                                  json={"model": model, "messages": messages, "tools": schema, "tool_choice": "auto"})
+                    except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError):
+                        # _post gives up after API_RESENDS timeouts: don't keep hammering this function, give it up so it
+                        # goes red on the map and out of the scheduler, then let this run end and start fresh on the next one
+                        name = self.net.give_up_stuck_function(s.agent_id)
+                        if name:
+                            s.push("info", f"moving on: {name} kept timing out - marked it stuck, claiming the next")
+                        raise
                     if r.status_code == 200 or not _too_long(r):
                         break
                     budget = int(budget * 0.6)  # the server counts differently, or knows better: trim more
