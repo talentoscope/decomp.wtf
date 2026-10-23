@@ -16,6 +16,7 @@ dependencies = [
     "splat64[mips]>=0.50.1",
     "spimdisasm>=1.42.4",
     "rabbitizer>=1.16.2",
+    "py65>=1.2.0",  # Commodore 64: run unpackers and assemble documented 6510 routines
     "httpx>=0.28",
     "cryptography>=44",  # rooms' keys (Ed25519): a room shows it's the one its members joined, wherever it is
     "uvicorn>=0.30",

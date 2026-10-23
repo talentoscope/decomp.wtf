@@ -286,7 +286,8 @@ function parseRom(buf) {
 /* What the user dropped, from its first bytes (nothing is uploaded until they confirm). */
 const PLATFORM_NAME = { n64: "Nintendo 64", psx: "PlayStation", ps2: "PlayStation 2", playstation: "PlayStation 1 or 2",
   gc: "GameCube", wii: "Wii", gcwii: "GameCube or Wii", gba: "Game Boy Advance", gb: "Game Boy",
-  gbc: "Game Boy Color", sms: "Sega Master System", gg: "Sega Game Gear", nes: "Nintendo Entertainment System", nds: "Nintendo DS" };
+  gbc: "Game Boy Color", sms: "Sega Master System", gg: "Sega Game Gear", nes: "Nintendo Entertainment System",
+  c64: "Commodore 64", nds: "Nintendo DS" };
 const CW_PACK = {
   gcwii: { id: "mwcc", text: "Install CodeWarrior, the compilers GameCube and Wii games were built with (about 80 MB). It's proprietary software, kept by the decomp community: only if you accept that." },
   nds: { id: "mwccarm", text: "Install CodeWarrior for DS, the compilers DS games were built with (about 50 MB). It's proprietary software, kept by the decomp community: only if you accept that." },
@@ -375,6 +376,18 @@ function identifyHead(head, file) {
     }
     if (ok && used) return { ...base, platform: "gc", order: "program (DOL)", entry };
   }
+  // Commodore 64: magics first, then the extensions a PRG and a D64 have no header for (rom/c64.py).
+  const ext = (file.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase() || "";
+  const magic = text(0, 32);
+  const c64order = magic.startsWith("C64 tape image file") || magic.startsWith("C64S tape image file") ? "T64"
+    : magic.startsWith("C64-TAPE-RAW") ? "TAP"
+    : magic.startsWith("C64 CARTRIDGE") ? "CRT"
+    : magic.startsWith("GCR-1541") ? "G64"
+    : magic.startsWith("C64File") ? "PRG"
+    : ext === "prg" || ext === "p00" ? "PRG"
+    : ext === "t64" ? "T64" : ext === "tap" ? "TAP" : ext === "crt" ? "CRT" : ext === "g64" ? "G64"
+    : ext === "d64" ? "D64" : null;
+  if (c64order) return { ...base, platform: "c64", order: c64order, code: "", title: stem };
   const named = identifySega(head, file, stem, true);  // no header: the file's name decides
   return named ? { ...base, ...named } : null;
 }
@@ -394,7 +407,7 @@ function smsChecksum(head, at, size, copier) {
 function notSupported(head, file) {
   const text = (a, b) => String.fromCharCode(...head.slice(a, b));
   const ext = (file.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase() || "";
-  if (text(0, 2) === "MZ") return "That's a Windows program. PC games aren't supported yet: decomp.wtf starts from N64, PlayStation 1 and 2, GameCube, Wii, Game Boy, Game Boy Color, Game Boy Advance, NES, Master System, Game Gear and DS games.";
+  if (text(0, 2) === "MZ") return "That's a Windows program. PC games aren't supported yet: decomp.wtf starts from N64, PlayStation 1 and 2, GameCube, Wii, Game Boy, Game Boy Color, Game Boy Advance, NES, Master System, Game Gear, Commodore 64 and DS games.";
   if (text(0, 4) === "XEX2" || ext === "xex") return "That's an Xbox 360 program. Xbox 360 games aren't supported yet.";
   if (["nsp", "xci", "nso", "nro", "nca"].includes(ext) || text(0, 4) === "NSO0" || text(0, 4) === "PFS0") return "That's a Nintendo Switch file. Switch games aren't supported yet.";
   if (["sfc", "smc"].includes(ext)) return "That's a Super Nintendo ROM. SNES games were written in assembly, not compiled from C, so there's no C source to match.";
@@ -437,6 +450,9 @@ async function pickFile(file) {
     : (p === "sms" || p === "gg")
     ? [["Platform", PLATFORM_NAME[p]], ["Format", info.order], ["Size", MB(info.size)],
        ["Header", info.header ? "TMR SEGA" : "none (named by its extension)"], ["Project", "decomp.wtf"]]
+    : p === "c64"
+    ? [["Platform", PLATFORM_NAME[p]], ["Format", info.order], ["Size", MB(info.size)],
+       ["Project", "6510 assembly (py65)"]]
     : [["Platform", PLATFORM_NAME[p]], ["Format", info.order], ["Size", MB(info.size)],
        info.region ? ["Region", info.region] : null,
        info.code ? ["Game ID", info.code] : ["Entry", info.entry != null ? hex8(info.entry) : "from the disc"],
@@ -475,6 +491,10 @@ function setupCompilers(info) {
   else if (p === "sms" || p === "gg") {
     $("compilerRow").hidden = true; note.hidden = false;
     note.textContent = "Master System and Game Gear games are matched with the pinned GBDK-2020 (SDCC) toolchain. decomp.wtf installs it when you import. If that fails, the game is imported read-only (every function disassembled and searchable, but not handed out for matching), and importing it again once it is installed sets it right.";
+  }
+  else if (p === "c64") {
+    $("compilerRow").hidden = true; note.hidden = false;
+    note.textContent = "Commodore 64 programs are documented as 6510 assembly. decomp.wtf assembles that with py65, which is installed with the app. There is no C match: BASIC is detokenised, an unpacker is followed when the 6510 port model can run it, and each reached routine is labelled from the memory map.";
   }
   else if (p === "playstation") {
     $("compilerRow").hidden = true; note.hidden = false;
@@ -1859,7 +1879,7 @@ function leanSelect(a) {
 /* On a Game Boy project, helpers can also document hand-written routines in assembly (the assembly track) */
 const ASM_FOCUS = { id: "asm", name: "Document assembly", note: "hand-written routines, in assembly" };
 function focusChoices() {
-  return ["gb", "gbc", "sms", "gg", "nes"].includes(S.ov?.platform) && S.ov?.kind !== "fork" ? [...FOCUS, ASM_FOCUS] : FOCUS;
+  return ["gb", "gbc", "sms", "gg", "nes", "c64"].includes(S.ov?.platform) && S.ov?.kind !== "fork" ? [...FOCUS, ASM_FOCUS] : FOCUS;
 }
 function focusSelect() {
   const choices = focusChoices();
@@ -2332,7 +2352,7 @@ async function refreshFn(first) {
     };
     $("fnAsm").innerHTML = highlightAsm(d.asm);
     const kinds = { matched: "Matching C", documented: "Documented assembly", best: d.track ? "Best attempt so far (assembly)" : "Best attempt so far", latest: S.ov.kind === "fork" ? "In the source now" : "Latest attempt", draft: "Machine draft (m2c)", asm_draft: "Draft that rebuilds it: name it, comment it, then Try" };
-    $("fnSrcKind").textContent = kinds[d.source_kind] || (d.track ? `Not documented yet: write it in ${["sms", "gg"].includes(S.ov.platform) ? "WLA-DX" : S.ov.platform === "nes" ? "ca65" : "RGBDS"} assembly` : "No C yet");
+    $("fnSrcKind").textContent = kinds[d.source_kind] || (d.track ? `Not documented yet: write it in ${["sms", "gg"].includes(S.ov.platform) ? "WLA-DX" : S.ov.platform === "nes" ? "ca65" : S.ov.platform === "c64" ? "py65" : "RGBDS"} assembly` : "No C yet");
     if (!S.editDirty || first) setEditor(d.source || "", d);
     $("copySrc").onclick = () => navigator.clipboard.writeText($("fnEdit").value).then(() => toast("Copied."));
     renderFnChart(d);
@@ -3058,7 +3078,7 @@ async function renderProjectSettings() {
       toast("Cartridge profile saved.");
     } catch (e) { toast(esc(e.message), "err"); }
   });
-  $("compilerPanel").hidden = fork;
+  $("compilerPanel").hidden = fork || ov.platform === "c64";
   $("compilerDiagnostic").hidden = fork || !["psx", "ps2"].includes(ov.platform);
   if (!fork) {
     if (!S.st) await loadState();

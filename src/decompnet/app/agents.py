@@ -746,7 +746,7 @@ class Session:
 
 
 # The compiler guide a ROM project's agents read first, by platform (on N64, by its compiler).
-ROM_COMPILER_GUIDES = {"psx": "psx", "ps2": "ps2", "gba": "agbcc", "gb": "gb", "gbc": "gb", "sms": "sms", "gg": "sms", "nes": "nes"}
+ROM_COMPILER_GUIDES = {"psx": "psx", "ps2": "ps2", "gba": "agbcc", "gb": "gb", "gbc": "gb", "sms": "sms", "gg": "sms", "nes": "nes", "c64": "c64"}
 
 
 def compiler_guide(ov: dict) -> str:

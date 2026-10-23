@@ -57,6 +57,8 @@ _CS = {
     ("z80", False): ("z80", 0),
     # MOS 6502 (NES): rom/mos6502.py decodes it, so the sweep and the scoring read the same instruction forms
     ("mos6502", False): ("mos6502", 0),
+    # 6510 (Commodore 64): the same decoder. The lookup key is "mos6502", which the decoder set already has.
+    ("6510", False): ("mos6502", 0),
 }
 
 _REG = re.compile(

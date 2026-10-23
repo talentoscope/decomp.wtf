@@ -8,18 +8,19 @@ from dataclasses import dataclass, field
 import struct
 from pathlib import Path
 
-from . import chd, gb, gba, n64, nes, overlays, ps2, psx, sms
+from . import c64, chd, gb, gba, n64, nes, overlays, ps2, psx, sms
 from .n64 import RomError
 
 PLATFORMS = {"n64": "Nintendo 64", "psx": "PlayStation", "ps2": "PlayStation 2",
              "gba": "Game Boy Advance", "gb": "Game Boy", "gbc": "Game Boy Color",
-             "sms": "Sega Master System", "gg": "Sega Game Gear", "nes": "Nintendo Entertainment System"}
+             "sms": "Sega Master System", "gg": "Sega Game Gear", "nes": "Nintendo Entertainment System",
+             "c64": "Commodore 64"}
 SMALL = 64 * 1024 * 1024  # ROMs and programs are read whole; disc images are read from disk
 
 
 @dataclass
 class Picked:
-    platform: str  # n64 | psx | ps2 | gba | gb | gbc | sms | gg | nes
+    platform: str  # n64 | psx | ps2 | gba | gb | gbc | sms | gg | nes | c64
     data: bytes  # what we split: a z64 ROM, a PS-X EXE or a PS2 ELF
     filename: str  # name to store it under in the project folder
     info: dict
@@ -87,6 +88,10 @@ def identify(src: bytes | Path, name: str = "", cue_track: int | None = None) ->
     picked = _program(src, name)
     if picked is not None:
         return picked
+    found = c64.identify(src, name)
+    if found is not None:
+        image, info = found
+        return Picked("c64", image, "memory.c64", info, False)
     if name.lower().endswith(".cue"):
         raise RomError("import a CUE sheet by its local path, with its binary tracks in the same folder")
     if psx.is_disc(src):
@@ -95,7 +100,8 @@ def identify(src: bytes | Path, name: str = "", cue_track: int | None = None) ->
         raise RomError("this ELF program isn't for a console decomp.wtf can split from scratch yet")
     raise RomError("this isn't a ROM, disc or game program this app can read: pick an N64 ROM (.z64, .n64, .v64), "
                    "a Game Boy or Game Boy Color ROM (.gb, .gbc), a Game Boy Advance ROM (.gba), an NES ROM (.nes), "
-                   "a Master System or Game Gear ROM (.sms, .gg), a PlayStation 1 "
+                   "a Master System or Game Gear ROM (.sms, .gg), a Commodore 64 program "
+                   "(.prg, .t64, .d64, .tap, .crt, .g64), a PlayStation 1 "
                    "or 2 disc image (.bin, .img, .iso, .cue, .chd) or its program file (e.g. SLUS_200.00)")
 
 
