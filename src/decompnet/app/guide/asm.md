@@ -96,3 +96,13 @@ The same six checks, in ca65, the assembler NES disassemblies are written for:
   names: what the game writes to there is a table of its own, named as its data is.
 - `brk` is written as the opcode alone, its byte after it with `.byte`.
 - Refused: what reads files or changes how the rest assembles (`.include`, `.incbin`, `.macro`, `.segment`, `.org`...).
+
+## Commodore 64 (py65)
+
+The same six checks, assembled with py65 (it ships with the app; there is no ca65 step). Guide `c64` is the memory map and how a program was imported.
+
+- 6502 syntax: `lda #$00`, `sta VIC_BORDERCOLOR`, `jsr CHROUT`, `lda CPU_PORT`, `bne loop`, `jmp (CINV)`. Data is `.byte` and `.word` (little-endian).
+- A label on its own line belongs to the next instruction. Name an address with `wName = $033C`. The project's names are already defined.
+- There are no cartridge banks. A `jsr` or `jmp` names the routine it reaches. A branch inside the routine is a label.
+- Hardware, the processor port and KERNAL/BASIC calls use the map's names (`sta VIC_BORDERCOLOR`, `jsr CHROUT`). A store into `$A000–$BFFF` or `$E000–$FFFF` is RAM under the ROM when `$01 = $37` is not what the instruction wrote, so a store is not given a ROM routine's name. A `jsr`/`jmp` there is.
+- `.org`, `.include` and macros are refused.

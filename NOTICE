@@ -1,0 +1,19 @@
+decomp.wtf is released under the MIT license. See LICENSE.
+Other MIT notices shipped with this tree: licenses/synaptic-sms-MIT.txt.
+
+Third-party material
+--------------------
+
+sk6502 (ISC)
+  The Commodore 64 BASIC and KERNAL labels and descriptions in
+  src/decompnet/rom/c64_rommap.py come from sk6502's c64rom.ctl
+  (https://github.com/skoolkid/sk6502), Copyright 2019 Richard Dymond.
+  The ISC copyright and permission notice is in that module's header and in
+  licenses/sk6502-ISC.txt.
+
+  That control file states that its annotations are derived from
+  "The almost completely commented C64 ROM disassembly", V1.01, by Lee Davison,
+  2012. Davison's original disassembly carries no explicit open-source licence.
+  The ISC notice covers Richard Dymond's sk6502 distribution, which is the copy
+  this project vendors. I/O, colour RAM, screen RAM and the usual zero-page
+  names in src/decompnet/rom/c64_hw.py are not from sk6502.
