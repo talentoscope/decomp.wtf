@@ -59,6 +59,15 @@ name) so the next session starts ahead:
 - New projects build with `--fsigned-char` and no optimization flag, which is what GBDK's own `lcc` does. A game built
   another way may need `--opt-code-size` or `--opt-code-speed` (the project's compiler flags): if a function's loops or
   jumps come out in a different shape from the target, try those before rewriting, and say what worked in a note.
+- SM83 register allocation is decided by SDCC from the live ranges of the operands, and there is no keyword to pin one
+  from C. But the **calling convention** — the registers an argument and a return value pass through — is fixed *and*
+  configurable, so a mismatch there is not always unfixable. The default is `__sdcccall(1)`: an 8-bit argument or return
+  value lives in `a`, a 16-bit return value in `bc`, and once the first argument is 8-bit the second 8-bit argument goes
+  to `e`, the second 16-bit argument to `bc`. GBDK builds its games with the same toolchain (default `__sdcccall(1)`), so
+  when an argument or return value lands in a register the ROM does not use, check the convention before giving up:
+  `__sdcccall(0)` puts the first 8-bit value in `e` and every 16-bit value in `de`. A variable merely *held* in the wrong
+  register — an `int` counter, a temporary — is allocation and cannot be forced; reorder declarations and first uses and
+  note it instead of chasing bytes.
 
 ## Games written in assembly
 
@@ -97,9 +106,19 @@ What SDCC does write in such a game, and how (each matched on a real cartridge):
 - A tail call to a fixed address: `((void (*)(void))0x2547)();` as a function's last statement gives `jp $2547`.
 - An interrupt handler that only returns: `void handler(void) __critical __interrupt { }` gives `reti` (without
   `__critical`, `ei; ret`).
+- An array copy whose bytes you want to match: `memcpy(dst, src, n);` uses `ldir`. A hand loop that copies the same
+  bytes usually compiles to `ld [hl],a; ld l,$NN` instead, so a memcpy is the C form to aim at when the ROM runs a
+  block move. (SDCC only emits `ldir` for the library function, not for user loops.)
+- A hardware register that lives in `0xff00-0xffff`: `__sfr __at(0xff21) STAT;` in addition to the `*(volatile u8 *)`
+  form the guide already uses; `__banked __sfr` covers the 16-bit addresses.
 
-What it doesn't: a loop counted in `b` where SDCC picks `c`, `ld a, n` then `ld [nn], a` (SDCC writes
-`ld hl, nn` then `ld [hl], n`), long runs of `ld [hl+], a` with constants. Don't spend many tries on those.
+What it doesn't match, and so falls to the assembly track rather than more C tries:
+- A loop counted in `b` where SDCC picks `c`, `ld a, n` then `ld [nn], a` (SDCC writes `ld hl, nn` then `ld [hl], n`),
+  long runs of `ld [hl+], a` with constants; a variable held in the wrong register is allocation — decided by live
+  ranges, pinned from C by nothing — so note it rather than chase bytes.
+- `ei`/`di`: SM83 has no C form, and `__critical` on SM83 only re-enables interrupts (it cannot mask a source), so
+  anything that depends on `ei`/`di` or a hand-written interrupt vector table — SDCC will not emit one — belongs on the
+  assembly track.
 
 ## Conventions
 

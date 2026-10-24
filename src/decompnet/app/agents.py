@@ -702,6 +702,7 @@ class Session:
     seq: int = 0
     stop: threading.Event = field(default_factory=threading.Event)
     proc: subprocess.Popen | None = None
+    client: httpx.Client | None = None  # api / lean loop: the httpx client, closed on stop for immediate kill
     usd: float = 0.0  # what the agent's provider charged, as the agent reports it
     tokens: int = 0
     signed_out: bool = False  # the agent CLI isn't signed in: trying again won't help
@@ -879,7 +880,12 @@ class Manager:
             if sid in (None, s.id):
                 s.stop.set()
                 if s.proc and s.proc.poll() is None:
-                    _terminate(s.proc)
+                    _terminate(proc=s.proc)
+                elif s.client is not None:
+                    # API-only agents have no subprocess: close the httpx client to kill any
+                    # in-flight HTTP call immediately. Lean agents also have an httpx client
+                    # but we don't need to touch it — they manage it via their own context manager.
+                    _terminate(client=s.client)
                 if s.state not in ("error",):
                     s.state = "stopped"
                 if sid is not None and s.agent_id:
@@ -1063,8 +1069,10 @@ class Manager:
             try:
                 if s.options.get("lean"):
                     ok = self._run_lean(s, agent)
+                elif s.kind == "api":
+                    ok = self._run_api(s, agent)
                 else:
-                    ok = self._run_api(s, agent) if s.kind == "api" else self._run_cli(s, token, workdir)
+                    ok = self._run_cli(s, token, workdir)
             except Fatal as e:  # needs the user first: retrying can't help
                 s.state, s.error = "error", str(e)
                 break
@@ -1529,6 +1537,7 @@ class Manager:
         pin = s.options.get("pin") or ""
         before = self._progress(agent.id)
         with httpx.Client(timeout=httpx.Timeout(API_TIMEOUT, connect=15)) as client:
+            s.client = client  # store on session for stop() to close
             def ask(messages, temperature, switch):
                 if s.kind == "codex":  # Codex picks its own sampling: the versions' directions do the varying
                     text, tokens, model = codex_reply(messages, s.options.get("model") or "", s.options.get("effort") or "",
@@ -1549,7 +1558,8 @@ class Manager:
                                  stall=int(s.options.get("stall") or (lean.STALL if pin else LEAN_MOVE_ON)),
                                  push=s.push, stamp=stamp,
                                  polish=(lambda fn: self._polish(s, fn)) if s.options.get("polish") else None,
-                                 can_switch=bool(s.options.get("escalate")))
+                                 can_switch=bool(s.options.get("escalate")),
+                                 interrupt=lambda: s.stop.is_set())
 
             s.push("info", f"session {s.runs}: {s.options.get('model') or 'default model'}"
                            + (f" via {s.options.get('base_url')}" if s.kind == "api" else f" ({KINDS[s.kind].name})"))
@@ -1627,6 +1637,7 @@ class Manager:
                     {"role": "user", "content": task}]
         used_tool = False
         with httpx.Client(timeout=httpx.Timeout(API_TIMEOUT, connect=15)) as client:
+            s.client = client  # store on session for stop() to close
             window = context_window(client, base, s.options)
             s.push("info", f"session {s.runs}: {model} via {base} ({window // 1000}K tokens of context)")
             budget = int(window * 0.7) - _tokens(schema)  # room for the reply and the tools' definitions
@@ -1924,15 +1935,21 @@ def api_tool_schemas(fork: bool = False, single: bool = False) -> list[dict]:
             for n, (d, p) in defs.items() if n in names]
 
 
-def _terminate(proc: subprocess.Popen) -> None:
+def _terminate(proc: subprocess.Popen | None = None, client: httpx.Client | None = None) -> None:
     try:
-        if WIN:
-            # the agent with everything it started (node starts opencode.exe, ...): terminate() would only end the
-            # first process and leave the rest working, and spending, in the background
-            res = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, timeout=30)
-            if res.returncode != 0 and proc.poll() is None:
-                proc.terminate()
-        else:
-            os.killpg(proc.pid, 15)
+        if proc is not None and proc.poll() is None:
+            if WIN:
+                # the agent with everything it started (node starts opencode.exe, ...): terminate() would only end
+                # the first process and leave the rest working, and spending, in the background
+                res = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, timeout=30)
+                if res.returncode != 0:
+                    proc.terminate()
+            else:
+                os.killpg(proc.pid, 15)
     except (OSError, ProcessLookupError, subprocess.TimeoutExpired):
         pass
+    if client is not None:
+        try:
+            client.close()
+        except Exception:
+            pass

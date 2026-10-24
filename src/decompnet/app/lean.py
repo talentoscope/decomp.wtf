@@ -26,6 +26,7 @@ user picked one; a gain resets all that. The loop stops at a match, when the fun
 from __future__ import annotations
 
 import re
+import threading
 from collections import Counter
 from dataclasses import dataclass
 from typing import Callable
@@ -243,12 +244,13 @@ class Lean:
     def __init__(self, net, agent, slug: str, name: str, ask: Callable, *, method: str = SEVERAL,
                  variants: int = VARIANTS, stall: int = STALL, push: Callable = lambda kind, text: None,
                  stamp: Callable = lambda method, tokens, model: None, polish: Callable | None = None,
-                 can_switch: bool = False):
+                 can_switch: bool = False, interrupt: Callable = lambda: False):
         if method not in METHODS:
             raise ValueError(f"method must be one of {', '.join(METHODS)}")
         self.net, self.agent, self.slug, self.name, self.ask = net, agent, slug, name, ask
         self.method, self.variants, self.stall = method, max(2, int(variants)), max(1, int(stall))
         self.push, self.stamp, self.polish, self.can_switch = push, stamp, polish, can_switch
+        self.interrupt = interrupt  # callable that returns True when the session should stop immediately
         self.tried: list[Tried] = []
         self.seen: set[str] = set()
         self.since_gain = 0
@@ -402,6 +404,8 @@ class Lean:
         label = method_label(n)
         switch = self.can_switch and self.since_gain >= SWITCH_AFTER
         temperature = 0.3 if self.since_gain < 2 else 0.7 if self.since_gain < 5 else 1.0
+        if self.interrupt():
+            return "stopped"
         text, tokens, model = self.ask(self.messages(fn, n), temperature, switch)
         self.calls += 1
         best_before = fn["best_score"]
