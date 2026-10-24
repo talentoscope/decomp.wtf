@@ -42,7 +42,7 @@ DEFAULT_TOOLCHAIN = {"KMC": "gcc-2.7.2-kmc", "IDO": "ido-7.1", "PSYQ": "gcc-2.7.
 # beta: works and is tested on homemade games, less so on real ones yet.
 PLATFORM_STATUS = {"gc": "recommended", "wii": "recommended", "n64": "recommended",
                    "psx": "beta", "ps2": "beta", "gba": "beta", "gb": "beta", "gbc": "beta", "sms": "beta", "gg": "beta",
-                   "nes": "beta", "nds": "beta"}
+                   "nes": "beta", "nds": "beta", "c64": "beta"}
 COMPILERS = {
     "gcc-2.7.2-kmc": "many third-party N64 games",
     "ido-7.1": "most later first-party N64 games",
@@ -85,7 +85,8 @@ TOOLS = {
     "mgbdis": "Game Boy and Game Boy Color: splits a ROM into its functions",
     "rgbds": "Game Boy and Game Boy Color: rebuilds the split to prove it is faithful",
     "wla-dx": "Master System and Game Gear: assembles routines documented in assembly (built from its source)",
-    "cc65": "NES: assembles routines documented in assembly (ca65 and ld65, built from their source)",
+    "cc65": "NES: assembles routines documented in assembly (ca65 and ld65, built from their source). "
+            "Commodore 64 assembly is assembled with py65, which is installed with the app.",
 }
 # Functions this small are handed out in batches (claim_function count): agents match most on the first try.
 BATCH_INSNS = 48
@@ -96,8 +97,8 @@ PLATFORM_COMPILERS = {"n64": ["gcc-2.7.2-kmc", "ido-7.1", "ido-5.3"], "psx": [tc
 BANKED_PLATFORMS = ("gb", "gbc", "sms", "gg", "nes")
 BANKED_ARCHS = ("sm83", "z80", "mos6502")
 # The assembly track's consoles: hand-written routines documented in RGBDS (Game Boy), WLA-DX (Master System, Game
-# Gear) or ca65 (NES)
-ASM_ARCHS = ("sm83", "z80", "mos6502")
+# Gear), ca65 (NES) or py65 (Commodore 64). 6510 is not a banked cartridge arch.
+ASM_ARCHS = ("sm83", "z80", "mos6502", "6510")
 # the names mgbdis gives the Game Boy split's functions (and its vectors): a symbol file's names replace them
 _GENERATED = re.compile(r"^(?:Call|Func|Jump|jr)_[0-9a-f]{3}_[0-9a-f]{4}$|^RST_[0-9a-f]{2}$|Interrupt$|^Boot$")
 
@@ -453,6 +454,10 @@ class RomNetwork(Network):
         if not self.is_rom(proj):
             return super()._asm_text(fn, proj)
         text = fn["asm"] or ""
+        if proj["arch"] == "6510":
+            from ..rom import c64_hw
+
+            text = c64_hw.name_listing(text)
         if proj["arch"] == "sm83" and fn["target"] and _listed(text) != (fn["n_insns"] or 0):
             text = self._sm83_listing(proj, fn)
         if proj["arch"] == "sm83":  # its registers by name (hardware.inc 6.0)
@@ -551,6 +556,8 @@ class RomNetwork(Network):
             f"{info['region']}), {size}, looks built with {info['compiler_guess']}")
         if picked.platform == "gba":
             return self._import_gba(picked, slug, workdir, toolchain, flags, log)
+        if picked.platform == "c64":
+            return self._import_c64(picked, slug, workdir, log)
         if picked.platform in BANKED_PLATFORMS:
             return self._import_banked(picked, slug, workdir, log)
         if picked.overlays:
@@ -793,6 +800,64 @@ class RomNetwork(Network):
         from .banked_import import import_project
 
         return import_project(self, picked, slug, workdir, log, BASE_HEADER.format(title=picked.info["title"]))
+
+    def _import_c64(self, picked, slug: str, workdir: Path, log) -> str:
+        """A Commodore 64 program: the C64R snapshot's functions, labelled, on the assembly track.
+
+        There is no C match. Each routine is hand-written 6510 and documented with py65. The context
+        header carries the hardware map and the BASIC/KERNAL names."""
+        from ..rom import c64, c64_hw
+
+        info = picked.info
+        report: dict = {}
+        fns = c64.split(workdir / picked.filename, workdir, log=log, report=report)
+        header = BASE_HEADER.format(title=info["title"]) + "\n" + c64_hw.context_header()
+        cfg = {
+            "kind": "rom", "platform": "c64", "big_endian": False, "gp": 0, "arch": "6510",
+            "splitter": "c64",
+            "rom": {**info, "file": picked.filename, "program": picked.filename},
+            "segments": [{"name": "ram", "rom_start": c64.HEADER, "rom_end": c64.HEADER + c64.RAM, "vram": 0}],
+            "compiler": {"toolchain": "py65", "flags": [], "timeout": 60, "provenance": "explicit",
+                         "note": "Commodore 64 routines are documented as 6510 assembly (py65), not matched from C"},
+            "legal": {"basis": "personal-copy", "license": "personal use only",
+                      "statement": "imported by the owner of this copy of the game, who confirmed it was legally obtained",
+                      "confirmed_at": time.time()},
+            "context": {"file": None},
+            "built_with": None,
+        }
+        meta = json.dumps({"asm_code": "hand-written 6510 machine code"})
+        how = "emulated" if info.get("method") == "emulated" else "static"
+        description = (f"Commodore 64 · entry ${info.get('entry', 0):04X} ({how}) · {len(fns)} functions")
+        now = time.time()
+        with self.store.tx() as db:
+            pid = db.execute(
+                "INSERT INTO projects(slug,name,description,arch,big_endian,root,config) VALUES(?,?,?,?,?,?,?)",
+                (slug, info["title"], description, "6510", 0, str(workdir), json.dumps(cfg))).lastrowid
+            names: set[str] = set()
+            for f in fns:
+                name = f.name if f.name not in names else f"{f.name}_{f.rom:06x}"
+                names.add(name)
+                db.execute(
+                    "INSERT INTO functions(project_id,name,size,n_insns,target,relocs,asm,seed,unit,vram,rom_offset,"
+                    "status,meta) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (pid, name, f.size, f.n_insns, f.code, json.dumps([list(r) for r in f.refs or []]),
+                     f.asm, None, "ram", f.vram, f.rom, "asm", meta))
+                db.execute("INSERT INTO symbols(project_id,name,address,size,kind,preview) VALUES(?,?,?,?,?,?)",
+                           (pid, name, f.vram, f.size, "func", None))
+            for name, addr, kind, desc in c64_hw.symbols():
+                if name in names:
+                    continue
+                names.add(name)
+                db.execute("INSERT INTO symbols(project_id,name,address,size,kind,preview) VALUES(?,?,?,?,?,?)",
+                           (pid, name, addr, 0, kind, (desc or "")[:240]))
+            db.execute("INSERT INTO context_versions(project_id,version,header,agent_id,message,created_at,unit) "
+                       "VALUES(?,?,?,?,?,?,?)", (pid, 1, header, None, "C64 memory map", now, ""))
+            self._store_regions(db, pid, report.get("regions") or [])
+            self._event(db, pid, None, "import",
+                        f"{len(fns)} functions from {info['title']}; entry ${info.get('entry', 0):04X} ({how})")
+        log(f"ready: {len(fns)} functions at entry ${info.get('entry', 0):04X} ({info.get('note') or how}). "
+            "Document them as 6510 assembly.")
+        return slug
 
     def resplit_banked(self, slug: str, apply: bool = False, log=print) -> dict:
         """Split a Game Boy, Master System or NES game again with this version's splitter, keeping the work done on
@@ -2425,11 +2490,11 @@ class RomNetwork(Network):
 
     @staticmethod
     def _asm_judge(proj):
-        """The assembly track's judge for a project's CPU: rom/gb_asm.py (RGBDS), rom/sms_asm.py (WLA-DX) or
-        rom/nes_asm.py (ca65)."""
-        from ..rom import gb_asm, nes_asm, sms_asm
+        """The assembly track's judge for a project's CPU: rom/gb_asm.py (RGBDS), rom/sms_asm.py (WLA-DX),
+        rom/nes_asm.py (ca65) or rom/c64_asm.py (py65)."""
+        from ..rom import c64_asm, gb_asm, nes_asm, sms_asm
 
-        return {"z80": sms_asm, "mos6502": nes_asm}.get(proj["arch"], gb_asm)
+        return {"z80": sms_asm, "mos6502": nes_asm, "6510": c64_asm}.get(proj["arch"], gb_asm)
 
     def claim_asm(self, agent: Agent, project: str | None, function: str | None = None) -> str:
         """A claim on the assembly track: a hand-written Game Boy routine to document (one asked for, or the next: the
@@ -2437,7 +2502,7 @@ class RomNetwork(Network):
         proj = self._project(project) if project or not function else self.store.one(
             "SELECT * FROM projects WHERE id=?", self._function(function, None)["project_id"])
         if (proj["arch"] or "") not in ASM_ARCHS or self.fork_slug(proj["slug"]):
-            raise NetworkError("the assembly track is for Game Boy, Master System, Game Gear and NES projects for now")
+            raise NetworkError("the assembly track is for Game Boy, Master System, Game Gear, NES and Commodore 64 projects for now")
         if (link := self._link(proj["slug"])) is not None:  # a room: its host hands the routine out (and judges it)
             asked = self._function(function, proj["slug"])["name"] if function else None
             name = link.claim(agent, asked, "easiest", track="asm")
@@ -2508,12 +2573,15 @@ class RomNetwork(Network):
         it, what the map knows about it, and the six checks."""
         proj = self.store.one("SELECT * FROM projects WHERE id=?", fn["project_id"])
         judge, sms, nes = self._asm_judge(proj), proj["arch"] == "z80", proj["arch"] == "mos6502"
-        assembler = "WLA-DX" if sms else "ca65" if nes else "RGBDS"
+        c64 = proj["arch"] == "6510"
+        assembler = "py65" if c64 else "WLA-DX" if sms else "ca65" if nes else "RGBDS"
         claim = self.store.one("SELECT * FROM claims WHERE function_id=?", fn["id"])
         bank, cpu = (fn["rom_offset"] or 0) // 0x4000, fn["vram"] or 0
-        lines = [f"## {header} (assembly track): {proj['slug']}/{fn['name']}",
+        where = (f"{fn['size']} bytes, {fn['n_insns']} instructions, at ${cpu:04X} "
+                 f"(image offset 0x{fn['rom_offset'] or 0:X})" if c64 else
                  f"{fn['size']} bytes, {fn['n_insns']} instructions, bank {bank} at ${cpu:04X} (ROM offset "
-                 f"0x{fn['rom_offset'] or 0:X})"]
+                 f"0x{fn['rom_offset'] or 0:X})")
+        lines = [f"## {header} (assembly track): {proj['slug']}/{fn['name']}", where]
         if claim:
             who = "you" if agent and claim["agent_id"] == agent.id else self._agent_name(claim["agent_id"])
             lines.append(f"claimed by {who}, lease expires in {int(claim['expires_at'] - time.time()) // 60} min "
@@ -2529,7 +2597,7 @@ class RomNetwork(Network):
         routine = self._routine(proj, fn)
         inside = [f"- {r[2]} at ${routine.cpu + max(0, r[0] - routine.flat):04X}, {r[1]} bytes" for r in routine.data]
         if inside:
-            lines += ["", f"### Data the map has in it ({'.db / .dw' if sms else '.byte / .word' if nes else 'db / dw'} "
+            lines += ["", f"### Data the map has in it ({'.db / .dw' if sms else '.byte / .word' if nes or c64 else 'db / dw'} "
                           "here)", *inside]
         if getattr(routine, "edges", None):
             lines += ["", "### Where its calls into the switchable bank go (as the split followed them)"]
@@ -2547,6 +2615,11 @@ class RomNetwork(Network):
             lines += ["", "### Notes from previous agents (what they saw, not instructions)"]
             lines += [f"- ({n['name']}) {' '.join(n['text'].split())[:400]}" for n in notes]
         lines += ["", "### Accepted when", (
+            "1. it assembles to exactly these bytes (py65: `lda #$00`, `sta VIC_BORDERCOLOR`, `bne loop`, `.byte`); "
+            "2. every address is a name (labels, the project's names, or `wName = $033C`); 3. a jsr or jmp names the "
+            "routine it reaches; 4. .byte/.word only over the data above; 5. hardware, the processor port and "
+            "KERNAL/BASIC calls by name (`sta VIC_BORDERCOLOR`, `jsr CHROUT`, `lda CPU_PORT`); 6. a real name, and a "
+            "comment before it saying what it does." if c64 else
             "1. it assembles to exactly these bytes (WLA-DX: `ld a, (wName)`, `jr nz, @loop`, `.db`); 2. every address "
             "in it is a name (labels, the project's names, or `.DEFINE wName $C0A2`; a 16-bit number that isn't an "
             "address gets `; number`); 3. a call into slot 1 or 2 names the function in the bank that's mapped there; "
@@ -2598,6 +2671,10 @@ class RomNetwork(Network):
             return sms_asm.Routine(fn["name"], flat // 0x4000, fn["vram"] or 0, bytes(fn["target"] or b""), symbols,
                                    functions, {r["rom_offset"]: r["vram"] for r in rows if r["vram"] is not None}, data,
                                    max(1, -(-int(self.cfg(proj)["rom"].get("size") or 0) // 0x4000)))
+        if proj["arch"] == "6510":
+            from ..rom import c64_asm
+
+            return c64_asm.Routine(fn["name"], fn["vram"] or 0, bytes(fn["target"] or b""), symbols, flat=flat, data=data)
         if proj["arch"] == "mos6502":  # (offsets are the file's; banks count from the PRG's start)
             from ..rom import nes_asm
 
@@ -2622,7 +2699,7 @@ class RomNetwork(Network):
         proj = self._project(project) if project else self.store.one("SELECT * FROM projects WHERE id=?", fn["project_id"])
         self.sms.require(row=proj)
         if (self.cfg(proj).get("arch") or "").lower() not in ASM_ARCHS:
-            raise NetworkError("documented assembly is for Game Boy, Master System, Game Gear and NES projects for now")
+            raise NetworkError("documented assembly is for Game Boy, Master System, Game Gear, NES and Commodore 64 projects for now")
         judge = self._asm_judge(proj)  # (RGBDS or WLA-DX)
         if fn["status"] == "documented":
             raise NetworkError(f"{fn['name']} is documented already")
@@ -2643,7 +2720,7 @@ class RomNetwork(Network):
             else:
                 db.execute("UPDATE claims SET expires_at=? WHERE function_id=?", (now + self.claim_ttl, fn["id"]))
         if not judge.available():
-            raise NetworkError(f"{ {'z80': 'WLA-DX', 'mos6502': 'cc65'}.get(proj['arch'], 'RGBDS') } isn't installed: "
+            raise NetworkError(f"{ {'z80': 'WLA-DX', 'mos6502': 'cc65', '6510': 'py65'}.get(proj['arch'], 'RGBDS') } isn't installed: "
                                "install it from Setup")
         try:
             verdict = judge.judge(self._routine(proj, fn), text)
@@ -3121,8 +3198,28 @@ class RomNetwork(Network):
             "SUM(status='asm') AS asm, SUM(CASE WHEN status='asm' THEN size ELSE 0 END) AS asm_bytes, "
             "SUM(status='documented') AS documented, SUM(CASE WHEN status='documented' THEN size ELSE 0 END) AS documented_bytes "
             "FROM functions WHERE project_id=?", proj["id"])
-        tc = toolchains.get(cfg["compiler"]["toolchain"])
         from ..rom.sms_profile import describe
+        unit_names = [r["unit"] for r in self.store.all(
+            "SELECT DISTINCT unit FROM functions WHERE project_id=? ORDER BY unit", proj["id"])]
+        if cfg.get("platform") == "c64":
+            from ..rom import c64_asm
+            compiler = {"toolchain": "py65", "name": "py65 (6510 assembly)", "flags": list(cfg["compiler"].get("flags") or []),
+                        "aspsx": "", "probe": None, "libraries": None, "small_data": None,
+                        "units": cfg["compiler"].get("units", {}), "unit_names": unit_names,
+                        "installed": c64_asm.available(), "proprietary": False, "supported": True, "wsl": False,
+                        "why": None}
+        else:
+            tc = toolchains.get(cfg["compiler"]["toolchain"])
+            compiler = {"toolchain": tc.id, "name": SHORT_NAMES.get(tc.id, tc.name), "flags": cfg["compiler"]["flags"],
+                        "aspsx": cfg["compiler"].get("aspsx", ""),
+                        "probe": cfg.get("compiler_probe"),
+                        "libraries": cfg.get("psyq_libraries"),
+                        "small_data": cfg.get("small_data"),
+                        "units": cfg["compiler"].get("units", {}),
+                        "unit_names": unit_names,
+                        "installed": toolchains.installed(tc.id) is not None, "proprietary": tc.proprietary,
+                        "supported": tc.supported, "wsl": tc.via_wsl,
+                        "why": None if tc.supported else toolchains.unsupported_cpu()}
         return {
             "slug": proj["slug"], "title": proj["name"], "description": proj["description"],
             "platform": cfg.get("platform", "n64"), "platform_name": detect.PLATFORMS.get(cfg.get("platform", "n64"), ""),
@@ -3130,18 +3227,9 @@ class RomNetwork(Network):
             "compilers": PLATFORM_COMPILERS.get(cfg.get("platform", "n64"), []),
             "rom": {k: cfg["rom"].get(k) for k in ("title", "game_code", "region", "size", "sha1", "byte_order", "compiler_guess")},
             # what built a banked game, as its bytes say (rom/fingerprint.py): None, most likely assembly; absent, not read
-            "built_with": cfg.get("built_with", False) if cfg.get("arch") in BANKED_ARCHS else False,
-            "compiler": {"toolchain": tc.id, "name": SHORT_NAMES.get(tc.id, tc.name), "flags": cfg["compiler"]["flags"],
-                         "aspsx": cfg["compiler"].get("aspsx", ""),
-                         "probe": cfg.get("compiler_probe"),
-                         "libraries": cfg.get("psyq_libraries"),
-                         "small_data": cfg.get("small_data"),
-                         "units": cfg["compiler"].get("units", {}),
-                         "unit_names": [r["unit"] for r in self.store.all(
-                             "SELECT DISTINCT unit FROM functions WHERE project_id=? ORDER BY unit", proj["id"])],
-                         "installed": toolchains.installed(tc.id) is not None, "proprietary": tc.proprietary,
-                         "supported": tc.supported, "wsl": tc.via_wsl,
-                         "why": None if tc.supported else toolchains.unsupported_cpu()},
+            "built_with": None if cfg.get("platform") == "c64" else (
+                cfg.get("built_with", False) if cfg.get("arch") in BANKED_ARCHS else False),
+            "compiler": compiler,
             "functions": agg["total"] or 0, "matched": agg["matched"] or 0, "bytes": agg["bytes"] or 0,
             "matched_bytes": agg["matched_bytes"] or 0, "attempts": agg["attempts"] or 0,
             # set aside: assembly no compiler makes, or what the split took for code (see handwritten.py)

@@ -1,0 +1,24 @@
+sk6502 — Commodore 64 ROM labels used by decomp.wtf
+
+The BASIC and KERNAL names and descriptions in src/decompnet/rom/c64_rommap.py
+are derived from sk6502's c64rom.ctl (https://github.com/skoolkid/sk6502).
+
+Copyright 2019 Richard Dymond
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
+Provenance. sk6502's c64rom.ctl says its annotations are derived from
+"The almost completely commented C64 ROM disassembly", V1.01, by Lee Davison,
+2012. Davison's original disassembly carries no explicit open-source licence.
+The ISC notice above is the licence of Richard Dymond's sk6502 distribution,
+which is the copy these labels were taken from.

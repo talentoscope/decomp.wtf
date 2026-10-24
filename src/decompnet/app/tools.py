@@ -36,10 +36,11 @@ GUIDES = {
     "arm": "ARM and Thumb (GBA, DS, 3DS): registers, conditional code, literal pools",
     "agbcc": "matching Game Boy Advance code built with agbcc",
     "gb": "Game Boy and Game Boy Color: SM83, banked cartridges, GBDK-2020/SDCC matching",
-    "asm": "the assembly track (Game Boy, Master System, Game Gear, NES): documenting a hand-written routine in "
-           "assembly (RGBDS, WLA-DX, ca65), the six checks",
+    "asm": "the assembly track (Game Boy, Master System, Game Gear, NES, Commodore 64): documenting a hand-written "
+           "routine in assembly (RGBDS, WLA-DX, ca65, py65), the six checks",
     "sms": "Master System and Game Gear: Z80, the Sega mapper, GBDK-2020/SDCC matching",
     "nes": "NES: the 6502, iNES mappers and banks, GBDK-2020/SDCC matching",
+    "c64": "Commodore 64: PRG, T64, D64, TAP, CRT and G64, BASIC, unpackers, the 6510 and the memory map",
     "x86": "x86 and MSVC (PC, Xbox): calling conventions, SEH, matching MSVC output",
     "aarch64": "AArch64 and Clang (Switch): registers, matching Clang output",
     "similarity": "finding similar functions and reusing matched code",
@@ -50,6 +51,7 @@ PLATFORM_GUIDES = {
     "n64": ["mips"], "ps": ["mips", "psx"], "ps2": ["mips", "ps2"], "psp": ["mips"],
     "gc": ["ppc", "mwcc", "cpp"], "wii": ["ppc", "mwcc", "cpp"], "nds": ["arm", "mwcc"], "3ds": ["arm", "cpp"],
     "gba": ["arm", "agbcc"], "gb": ["gb", "asm"], "gbc": ["gb", "asm"], "sms": ["sms", "asm"], "gg": ["sms", "asm"], "nes": ["nes", "asm"],
+    "c64": ["c64", "asm"],
     "switch": ["aarch64", "cpp"], "win32": ["x86", "cpp"], "xbox": ["x86", "cpp"],
     "xbox360": ["ppc", "cpp"],
 }
@@ -70,11 +72,13 @@ ASM_WORDS = {
             "hardware": "its names (guide asm)"},
     "nes": {"console": "NES", "assembler": "ca65", "define": "wName = $0300",
             "hardware": "the nesdev register names (guide asm)"},
+    "c64": {"console": "Commodore 64", "assembler": "py65", "define": "wName = $033C",
+            "hardware": "the C64 names (sta VIC_BORDERCOLOR, jsr CHROUT: guide c64)"},
 }
 
 
 def asm_words(platform: str) -> dict:
-    words = dict(ASM_WORDS["sms" if platform in ("sms", "gg") else "nes" if platform == "nes" else "gb"])
+    words = dict(ASM_WORDS["c64" if platform == "c64" else "sms" if platform in ("sms", "gg") else "nes" if platform == "nes" else "gb"])
     if platform == "gg":
         words["console"] = "Game Gear"
     return words
@@ -215,6 +219,9 @@ def _project_info(net: RomNetwork, slug: str) -> str:
             f"progress: {ov['matched']}/{ov['functions']} functions matched ({pct:.1f}% of code), "
             f"{ov['attempts']} compiles so far, context.h v{ov['context_version']}\n"
             f"Next: claim_function(). Guides: guide().")
+    if ov.get("platform") == "c64":
+        text += ("\nCommodore 64: these routines are hand-written 6510. claim_function(track=\"asm\") documents one "
+                 "(guide c64). There is no C to match.")
     if ov.get("mapping"):
         text += ("\nMapped banks: use full region__function names, get_context(function=...) and "
                  "edit_context(function=...) for that function's header, and read_data(unit=...) for its memory view. "
@@ -380,7 +387,7 @@ def build_mcp(net: RomNetwork, agent_of: Callable[[Context], tuple[Agent, str]])
                 instructions; ROM projects' default), closest (nearly matched already), hardest, random
             count: up to 6: small functions come as a batch (neighbours in one file) to write together and
                 judge in one compile_and_diff; a big one comes alone
-            track: asm (Game Boy, Master System, Game Gear, NES): a hand-written routine to document in assembly
+            track: asm (Game Boy, Master System, Game Gear, NES, Commodore 64): a hand-written routine to document in assembly
                 instead of matching in C (guide topic `asm`)
         """
         return await run(ctx, "claim_function", function=function, strategy=strategy, count=count, track=track)

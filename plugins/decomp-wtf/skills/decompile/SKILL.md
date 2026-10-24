@@ -1,6 +1,6 @@
 ---
 name: decompile
-description: Decompile a game the user owns (ROM, disc image, ISO, executable) into matching C with decomp.wtf. Use when the user asks to decompile, decomp, reverse engineer, port or mod a game, or to match a game's functions byte for byte (N64, PlayStation 1 and 2, GameCube, Wii, Game Boy Advance, DS, or a public decomp of any platform).
+description: Decompile a game the user owns (ROM, disc image, ISO, executable) into matching C with decomp.wtf. Use when the user asks to decompile, decomp, reverse engineer, port or mod a game, or to match a game's functions byte for byte (N64, PlayStation 1 and 2, GameCube, Wii, Game Boy Advance, DS, Commodore 64, or a public decomp of any platform). A Commodore 64 program is documented as 6510 assembly (claim_function with track asm), not matched from C.
 ---
 
 # Decompiling a game with decomp.wtf
