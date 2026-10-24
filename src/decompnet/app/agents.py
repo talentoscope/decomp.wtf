@@ -1327,9 +1327,16 @@ class Manager:
                                             repeat=self._repeat(s),
                                             guides=", ".join(f'guide("{g}")' for g in guides))
         if s.options.get("track") == "asm":
-            return tools.ASM_PROMPT.format(title=ov["title"], count=s.options.get("per_session", PER_SESSION),
+            return tools.ASM_PROMPT.format(title=ov["title"], repeat=self._asm_repeat(s),
                                            **tools.asm_words(ov.get("platform") or ""))
         return tools.WORK_PROMPT.format(title=ov["title"], repeat=self._repeat(s), compiler_guide=compiler_guide(ov))
+
+    @staticmethod
+    def _asm_repeat(s: Session) -> str:
+        if s.kind == "api":  # the app trims this agent's context, so it keeps going like on the C track
+            return ("Keep going: claim a routine, document or release it, then claim the next, until claim_function "
+                    "says nothing is left")
+        return f"Repeat for up to {s.options.get('per_session', PER_SESSION)} routines, then stop"
 
     @staticmethod
     def _repeat(s: Session) -> str:
@@ -1897,6 +1904,11 @@ def api_tool_schemas(fork: bool = False, single: bool = False) -> list[dict]:
                             s(function=st("function", True), reason=st("what a person should look at", True))),
         "merge_function": ("Join a function with its neighbour when the split cut one routine in two.",
                            s(function=st("function", True))),
+        "create_function": ("C64: add a routine the function finder missed, starting at `at`; say how it's reached.",
+                            s(at=st("address of its first instruction, like $1A00", True),
+                              reason=st("how it's reached, e.g. jump table at $1F00, entry 3", True), new_name=st("name"))),
+        "delete_function": ("C64: remove a routine that isn't code; its bytes are kept as data. Say what they are.",
+                            s(function=st("function", True), reason=st("what the bytes are instead of code", True))),
         "correct_split": ("Game Boy, Master System: tell the split what it got wrong (used when the game is split again): kind data | "
                           "code | table | operands | noreturn, at a function, NN:AAAA or an address, count (bytes, "
                           "entries), and how you know.",

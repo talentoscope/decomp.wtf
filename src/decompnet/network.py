@@ -63,6 +63,11 @@ STRATEGIES = {
 }
 
 
+# What an agent leaves on a function's notes, which starting again clears (a person's `for_agents` stays)
+_AGENT_META = ("review", "review_by", "review_at", "review_track", "sample")
+_AUTO_DATA = re.compile(r"D_[0-9A-Fa-f]{4,8}")
+
+
 class NetworkError(Exception):
     """An error meant to be shown to the agent as-is."""
 
@@ -971,10 +976,25 @@ class Network:
                        "WHERE id=?", (fn["id"],))
 
     def reset_project_progress(self, slug: str) -> dict[str, int]:
-        """Clear project attempts and agent progress while preserving its imported layout and settings."""
+        """Start a project again from how its import left it: agents' attempts, matches, documented routines, notes,
+        renames, header edits and review flags are all undone. The imported layout (and any split or join since),
+        settings and a person's own decisions (a routine given back to agents) stay."""
         proj = self._project(slug)
         with self.store.tx() as db:
             functions = db.execute("SELECT COUNT(*) FROM functions WHERE project_id=?", (proj["id"],)).fetchone()[0]
+            renames = self._undo_renames(db, proj["id"])
+            contexts = db.execute("DELETE FROM context_versions WHERE project_id=? AND agent_id IS NOT NULL",
+                                  (proj["id"],)).rowcount
+            reviews = 0
+            for row in db.execute("SELECT id, meta FROM functions WHERE project_id=? AND meta IS NOT NULL",
+                                  (proj["id"],)).fetchall():
+                meta = json.loads(row["meta"] or "{}")
+                kept = {k: v for k, v in meta.items() if k not in _AGENT_META}
+                if kept != meta:
+                    reviews += "review" in meta
+                    db.execute("UPDATE functions SET meta=? WHERE id=?", (json.dumps(kept), row["id"]))
+            documented = db.execute("UPDATE functions SET status='asm' WHERE project_id=? AND status='documented'",
+                                    (proj["id"],)).rowcount
             claims = db.execute("DELETE FROM claims WHERE function_id IN "
                                 "(SELECT id FROM functions WHERE project_id=?)", (proj["id"],)).rowcount
             attempts = db.execute("DELETE FROM attempts WHERE function_id IN "
@@ -989,7 +1009,28 @@ class Network:
                 "matched_at=NULL, attempts=0, abandons=0, stalls=0, ignored=0 WHERE project_id=?",
                 (proj["id"],))
         return {"functions": functions, "claims": claims, "attempts": attempts, "notes": notes,
-                "events": events, "twin_misses": twin_misses}
+                "events": events, "twin_misses": twin_misses, "renames": renames, "contexts": contexts,
+                "documented": documented, "reviews": reviews}
+
+    @staticmethod
+    def _undo_renames(db, project_id: int) -> int:
+        """Put back the names the import gave, by replaying the logged renames (`old \u2192 new`) newest first.
+        A name the rename added for a place the import never named (an automatic D_ name) is dropped again."""
+        undone = 0
+        for (detail,) in db.execute("SELECT detail FROM events WHERE project_id=? AND kind='rename' ORDER BY id DESC",
+                                    (project_id,)).fetchall():
+            parts = re.split(r"\s*(?:\u2192|->)\s*", (detail or "").strip())
+            if len(parts) != 2 or not all(parts):
+                continue
+            old, new = parts
+            db.execute("UPDATE functions SET name=? WHERE project_id=? AND name=?", (old, project_id, new))
+            had_old = db.execute("SELECT 1 FROM symbols WHERE project_id=? AND name=?", (project_id, old)).fetchone()
+            if had_old or _AUTO_DATA.fullmatch(old):
+                db.execute("DELETE FROM symbols WHERE project_id=? AND name=?", (project_id, new))
+            else:
+                db.execute("UPDATE symbols SET name=? WHERE project_id=? AND name=?", (old, project_id, new))
+            undone += 1
+        return undone
 
     def revoke_agent(self, name: str, erase: bool = False) -> None:
         """Disable an agent's token. With erase=True also strip its identity (GDPR erasure):

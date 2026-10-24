@@ -380,7 +380,7 @@ def binary(tid: str) -> Path:
     tc = get(tid)
     base = require(tid)
     name = tc.binary_name or tid
-    for candidate in (base / f"{name}.exe", base / name, base / "bin" / name):
+    for candidate in (base / f"{name}.exe", base / name, base / "bin" / f"{name}.exe", base / "bin" / name):
         if candidate.exists():
             return candidate
     raise ToolchainError(f"{tid} is installed but {name} wasn't found in {base}")

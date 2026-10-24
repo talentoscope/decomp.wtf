@@ -23,11 +23,12 @@ Hardware and ROM names are applied to the stored listing (``c64_hw``).
 from __future__ import annotations
 
 import hashlib
+import os
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import c64_basic, c64_hw, gb, mos6502
+from . import c64_basic, c64_hw, c64_vice, gb, mos6502
 from .n64 import RomError
 
 MAGIC = b"C64R"
@@ -70,6 +71,7 @@ class Image:
     name: str
     basic_text: str = ""
     blocks: list[Block] = field(default_factory=list)
+    regs: dict | None = None  # a VICE dump's CPU registers when the RAM was taken (pc, a, x, y, sp, p00, p01)
 
 
 def sniff(data: bytes, name: str = "") -> str | None:
@@ -77,6 +79,8 @@ def sniff(data: bytes, name: str = "") -> str | None:
     (it has no magic). A D64 is recognised by its size and the BAM signature too."""
     if data.startswith(b"C64 tape image file") or data.startswith(b"C64S tape image file"):
         return "t64"
+    if c64_vice.is_vsf(data):
+        return "vsf"
     if data.startswith(b"C64-TAPE-RAW"):
         return "tap"
     if data.startswith(b"C64 CARTRIDGE"):
@@ -89,14 +93,14 @@ def sniff(data: bytes, name: str = "") -> str | None:
         return "d64"
     ext = Path(name).suffix.lower()
     return {".prg": "prg", ".p00": "prg", ".t64": "t64", ".tap": "tap", ".crt": "crt", ".g64": "g64",
-            ".d64": "d64"}.get(ext)
+            ".d64": "d64", ".vsf": "vsf"}.get(ext)
 
 
-def identify(data: bytes, name: str = "") -> tuple[bytes, dict] | None:
+def identify(data: bytes, name: str = "", log=None) -> tuple[bytes, dict] | None:
     """``(C64R image, info)`` for a C64 file, or None when ``data`` isn't one."""
     if sniff(data, name) is None:
         return None
-    image = analyze(data, name)
+    image = analyze(data, name, log=log)
     info = {
         "platform": "c64", "title": image.name or Path(name).stem or "C64 program",
         "game_code": "", "region": "", "size": HEADER + RAM, "compiler_guess": "assembly",
@@ -106,6 +110,7 @@ def identify(data: bytes, name: str = "") -> tuple[bytes, dict] | None:
         "container": image.blocks[0].source if image.blocks else "",
         "original_size": len(data),
         "blocks": [{"name": b.name, "load": b.load, "length": len(b.data), "kind": b.kind} for b in image.blocks],
+        "regs": image.regs,
     }
     return pack(image), info
 
@@ -733,8 +738,38 @@ def _cartridge_entry(block: Block) -> int | None:
     return None
 
 
-def analyze(data: bytes, name: str = "") -> Image:
-    """The primary program in ``data``, unpacked when emulation can do it."""
+def from_dump(dump: c64_vice.Dump, name: str, method: str) -> Image:
+    """An Image from a RAM dump taken after loading (VICE): the BASIC program is found through TXTTAB ($2B)."""
+    ram, regs = dump.ram, dump.regs
+    txt = ram[0x2B] | ram[0x2C] << 8
+    vartab = ram[0x2D] | ram[0x2E] << 8
+    basic = None
+    if 0x0400 <= txt < 0xA000:
+        found = c64_basic.decode(ram[txt:0xA000], txt)
+        # BASIC's own end pointer agrees with where the listing ends: a real program, not bytes that look like one
+        if found.lines and abs(vartab - found.end) <= 2:
+            basic = found
+    in_ram = [t for t in (basic.sys if basic else []) if t < 0xA000 or 0xC000 <= t < 0xD000]  # not SYS 64738 (reset)
+    entry = in_ram[0] if in_ram else regs.get("pc", 0)
+    where = f"PC ${regs.get('pc', 0):04X}"
+    return Image(bytes(ram), entry, txt if basic else 0, basic.end if basic else 0, basic.end if basic else 0,
+                 in_ram[0] if in_ram else 0, method, f"{method[:4]} {where}", Path(name).stem or "C64",
+                 basic.text if basic else "", [], dict(regs))
+
+
+def analyze(data: bytes, name: str = "", log=None) -> Image:
+    """The primary program in ``data``, unpacked when emulation can do it.
+
+    A tape is loaded in VICE (any loader, turbo or not), and the RAM it ends with is the program. On Windows
+    decomp.wtf installs its own VICE the first time; DECOMP_C64_VICE=0 turns VICE off. A VICE snapshot (.vsf) is read as it is."""
+    kind = sniff(data, name)
+    if kind == "vsf":
+        return from_dump(c64_vice.read_vsf(data), name, "snapshot")
+    if kind == "tap" and os.environ.get("DECOMP_C64_VICE", "1") != "0":
+        vice = c64_vice.ensure_vice(log or print)
+        if vice is not None:
+            return from_dump(c64_vice.dump_tape(data, name, log=log or print, vice=vice),
+                             name, "vice")
     blocks = read_blocks(data, name)
     chosen = blocks[0]
     basic = c64_basic.decode(chosen.data, chosen.load)
@@ -757,11 +792,16 @@ def analyze(data: bytes, name: str = "") -> Image:
                  basic.entry or 0, method, note, chosen.name or Path(name).stem or "C64", basic.text, blocks)
 
 
+_METHODS = {"emulated": 1, "static": 2, "vice": 3, "snapshot": 4}
+
+
 def pack(image: Image) -> bytes:
     header = bytearray(HEADER)
     header[0:4] = MAGIC
     header[4] = 1
-    header[5] = 1 if image.method == "emulated" else 2
+    header[5] = _METHODS.get(image.method, 2)
+    if image.regs:  # a VICE dump: the stack pointer and the processor port when the RAM was taken
+        header[6], header[7] = image.regs.get("sp", 0) & 0xFF, image.regs.get("p01", 0) & 0xFF
     struct.pack_into("<HHHHH", header, 8, image.entry & 0xFFFF, image.load & 0xFFFF,
                      image.basic_end & 0xFFFF, image.sys & 0xFFFF, image.load_end & 0xFFFF)
     raw = (image.name or "").encode("ascii", "replace")[:30]
@@ -779,8 +819,10 @@ def parse(data: bytes) -> Image:
     entry, load, basic_end, sys_addr, load_end = struct.unpack_from("<HHHHH", data, 8)
     name = data[18:48].split(b"\x00", 1)[0].decode("ascii", "replace")
     note = data[48:64].split(b"\x00", 1)[0].decode("ascii", "replace")
-    return Image(data[HEADER:HEADER + RAM], entry, load, load_end, basic_end, sys_addr,
-                 "emulated" if data[5] == 1 else "static", note, name)
+    method = {v: k for k, v in _METHODS.items()}.get(data[5], "static")
+    regs = {"sp": data[6], "p01": data[7]} if method in ("vice", "snapshot") else None
+    return Image(data[HEADER:HEADER + RAM], entry, load, load_end, basic_end, sys_addr, method, note, name,
+                 regs=regs)
 
 
 # ---------------------------------------------------------------- functions
@@ -836,95 +878,67 @@ def _mem_operand(text: str) -> int | None:
     return m
 
 
-def functions(ram: bytes, entry: int) -> tuple[list[gb.GbFunction], list[tuple[int, int, str, str]]]:
-    """Functions reached from ``entry`` and the vectors, plus data islands a branch skips
-    (``(rom offset, size, kind, why)``, rom offset counted into a C64R image)."""
-    starts = [entry] if _program_target(ram, entry, entry) else []
-    for ptr in _planted_vectors(ram):
-        if _program_target(ram, ptr, entry) and ptr not in starts:
-            starts.append(ptr)
-    known: set[int] = set(starts)
-    queue = list(starts)
-    bodies: dict[int, tuple[dict[int, int], list]] = {}
-    while queue:
-        start = queue.pop(0)
-        if start in bodies:
-            continue
-        insns: dict[int, int] = {}
-        refs: list[tuple[int, int, int]] = []
-        stack = [start]
-        while stack:
-            pc = stack.pop()
-            if pc in insns or pc - start >= MAX_FUNCTION or pc < start:
-                if pc in insns or not (start <= pc < start + MAX_FUNCTION):
-                    continue
-            if pc != start and pc in known:
-                continue
-            op = ram[pc]
-            if op not in mos6502.OPCODES or op == 0x00:
-                continue
-            text, ln = mos6502.decode(ram[pc:pc + 3], pc)
-            if text.startswith("db"):
-                continue
-            insns[pc] = ln
-            kind, target = mos6502.flow(text)
-            rel = pc - start
-            if kind in ("call", "jump", "cjump") and target is not None:
-                refs.append((rel, 10, target))
-            mem = _mem_operand(text)
-            if mem is not None and c64_hw.name_of(mem):
-                refs.append((rel, 1, mem))
-            if kind in ("plain", "call"):
-                nxt = (pc + ln) & 0xFFFF
-                if nxt not in known or nxt == start:
-                    stack.append(nxt)
-            elif kind == "cjump" and target is not None:
-                nxt = (pc + ln) & 0xFFFF
-                if nxt not in known or nxt == start:
-                    stack.append(nxt)
-                if start <= target < start + MAX_FUNCTION and (target not in known or target == start):
-                    stack.append(target)
-            elif kind == "jump" and target is not None and start <= target <= pc and target not in known:
-                stack.append(target)
-            if kind in ("call", "jump") and target is not None and target not in known:
-                if _program_target(ram, target, entry):
-                    known.add(target)
-                    queue.append(target)
-        bodies[start] = (insns, refs)
+def functions(ram: bytes, entry: int, *, p01: int | None = None, sp: int | None = None,
+              basic: tuple[int, int] | None = None, sys_targets=(), report: dict | None = None
+              ) -> tuple[list[gb.GbFunction], list[tuple[int, int, str, str]]]:
+    """Every function c64_find finds (certain and probable), plus data islands a branch skips
+    (``(rom offset, size, kind, why)``, rom offset counted into a C64R image). ``report`` gets each function's
+    confidence (``found``: start -> confidence, score, why) and the coverage."""
+    from . import c64_find
+
+    vectors = [] if p01 is not None else [p for p in _planted_vectors(ram) if _program_target(ram, p, entry)]
+    start = entry if _program_target(ram, entry, entry) else None
+    if basic is not None and start is not None and basic[0] <= start < basic[1]:
+        basic = None  # the program was unpacked over its BASIC stub: those bytes are code now
+    result = c64_find.find(ram, start, p01=p01, sp=sp, basic=basic, sys_targets=list(sys_targets), vectors=vectors)
+    starts = {f.start for f in result.functions}
     out: list[gb.GbFunction] = []
     regions: list[tuple[int, int, str, str]] = []
-    for start in sorted(bodies):
-        insns, refs = bodies[start]
-        if start not in insns:
+    found: dict[int, dict] = {}
+    for f in result.functions:
+        end, islands = c64_find.body(f, starts)
+        if end <= f.start:
             continue
-        ordered = sorted(insns)
-        end = start
-        islands: dict[int, int] = {}
-        for addr in ordered:
-            if addr >= start + MAX_FUNCTION:
-                break
-            if addr != start and addr in known and addr != start:
-                # a function discovered inside this span ends the one we're bounding
-                if addr > start and addr in bodies and addr != start:
-                    break
-            if addr > end:
-                if addr - end <= 16 and _jumps_over(insns, end, addr):
-                    islands[end] = addr - end
-                    end = addr
-                else:
-                    break
-            end = min(start + MAX_FUNCTION, addr + insns[addr])
-        if end <= start:
-            continue
-        code = bytes(ram[start:end])
-        kept = [(off, kind, tgt) for off, kind, tgt in refs if off < len(code)]
-        n_insns = sum(1 for addr in insns if start <= addr < end)
-        asm = c64_hw.name_listing(mos6502.asm_text(code, start, width=4, data=islands))
-        out.append(gb.GbFunction(name=f"func_{start:04x}", vram=start, rom=HEADER + start, code=code,
-                                 n_insns=n_insns, asm=asm, refs=kept, bank=0))
+        code = bytes(ram[f.start:end])
+        refs: list[tuple[int, int, int]] = []
+        n_insns = 0
+        for addr in sorted(f.insns):
+            if not f.start <= addr < end:
+                continue
+            n_insns += 1
+            text, _ln = mos6502.decode(ram[addr:addr + 3], addr)
+            kind, target = mos6502.flow(text)
+            if kind in ("call", "jump", "cjump") and target is not None:
+                refs.append((addr - f.start, 10, target))
+            mem = _mem_operand(text)
+            if mem is not None and c64_hw.name_of(mem):
+                refs.append((addr - f.start, 1, mem))
+        asm = c64_hw.name_listing(mos6502.asm_text(code, f.start, width=4, data=islands))
+        out.append(gb.GbFunction(name=f"func_{f.start:04x}", vram=f.start, rom=HEADER + f.start, code=code,
+                                 n_insns=n_insns, asm=asm, refs=refs, bank=0))
+        found[f.start] = {"confidence": f.confidence, "score": f.score, "why": f.reason()}
         for addr, size in islands.items():
             regions.append((HEADER + addr, size, "data", "bytes a branch skips"))
+    if report is not None:
+        report["found"] = found
+        report["coverage"] = result.coverage
     return out, regions
+
+
+def refs_of(code: bytes, cpu: int, insns: list[int] | None = None) -> list[tuple[int, int, int]]:
+    """[offset, kind, address] per call or jump out of a routine (kind 10) and per chip register it uses (kind 1),
+    as the import records them. `insns`: the instruction addresses (default: decoded straight through)."""
+    refs: list[tuple[int, int, int]] = []
+    addrs = insns if insns is not None else [a for a, _t, _n in mos6502.disassemble(code, cpu)]
+    for addr in addrs:
+        text, _ln = mos6502.decode(code[addr - cpu:addr - cpu + 3], addr)
+        kind, target = mos6502.flow(text)
+        if kind in ("call", "jump", "cjump") and target is not None:
+            refs.append((addr - cpu, 10, target))
+        mem = _mem_operand(text)
+        if mem is not None and c64_hw.name_of(mem):
+            refs.append((addr - cpu, 1, mem))
+    return refs
 
 
 def _jumps_over(insns: dict[int, int], gap: int, resume: int) -> bool:
@@ -943,15 +957,25 @@ def split(path: Path | bytes, workdir: Path | None = None, log=print, report: di
     """Functions in a C64R image. The image is already unpacked; this does not emulate again."""
     data = path if isinstance(path, (bytes, bytearray)) else Path(path).read_bytes()
     image = parse(bytes(data))
-    fns, regions = functions(image.ram, image.entry)
+    regs = image.regs or {}
+    basic = (image.load, image.basic_end) if 0 < image.load < image.basic_end else None
+    found: dict = {}
+    fns, regions = functions(image.ram, image.entry, p01=regs.get("p01"), sp=regs.get("sp"), basic=basic,
+                             sys_targets=[image.sys] if image.sys else [], report=found)
     if report is not None:
+        report["found"] = found.get("found", {})
+        report["coverage"] = found.get("coverage", {})
         report["regions"] = regions
         report["entry"] = image.entry
         report["method"] = image.method
         report["note"] = image.note
         report["splitter"] = "c64"
     if log:
-        log(f"C64 entry ${image.entry:04X} ({image.method}); {len(fns)} functions")
+        cov = found.get("coverage", {})
+        log(f"C64 entry ${image.entry:04X} ({image.method}); {len(fns)} functions: "
+            f"{cov.get('certain_functions', 0)} certain, {cov.get('probable_functions', 0)} probable. Code "
+            f"{cov.get('certain_bytes', 0)} bytes certain, {cov.get('probable_bytes', 0)} probable, "
+            f"{cov.get('unexplained_bytes', 0)} unexplained")
     return fns
 
 

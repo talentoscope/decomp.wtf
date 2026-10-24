@@ -67,13 +67,15 @@ Everything runs on the user's computer. The game's code is the user's: never pub
 #: what ASM_PROMPT says differs by console: the assembler, and how names and hardware are written in it
 ASM_WORDS = {
     "gb": {"console": "Game Boy", "assembler": "RGBDS", "define": "DEF wName EQU $C0A2",
-           "hardware": "hardware.inc's names"},
+           "hardware": "hardware.inc's names", "not_routine": "correct_split or flag_for_review"},
     "sms": {"console": "Master System", "assembler": "WLA-DX", "define": ".DEFINE wName $C0A2",
-            "hardware": "its names (guide asm)"},
+            "hardware": "its names (guide asm)", "not_routine": "correct_split or flag_for_review"},
     "nes": {"console": "NES", "assembler": "ca65", "define": "wName = $0300",
-            "hardware": "the nesdev register names (guide asm)"},
+            "hardware": "the nesdev register names (guide asm)", "not_routine": "flag_for_review"},
     "c64": {"console": "Commodore 64", "assembler": "py65", "define": "wName = $033C",
-            "hardware": "the C64 names (sta VIC_BORDERCOLOR, jsr CHROUT: guide c64)"},
+            "hardware": "the C64 names (sta VIC_BORDERCOLOR, jsr CHROUT: guide c64)",
+            "not_routine": "delete_function it (with what the bytes are); code no routine covers: create_function; "
+                           "flag_for_review only when you aren't sure"},
 }
 
 
@@ -89,8 +91,7 @@ You are a decompilation agent in decomp.wtf, working on {title}, a {console} gam
 agents may be working on other routines of the same game at the same time; the tools keep you from colliding.
 
 Your job: document hand-written routines (no C compiles to them) as {assembler} assembly that rebuilds them byte
-for byte, with names, comments and constants instead of addresses. Use only the decomp tools. Repeat for up to
-{count} routines, then stop:
+for byte, with names, comments and constants instead of addresses. Use only the decomp tools. {repeat}:
 
 1. claim_function(track="asm") gives you the next routine: the routine as the split has it, a draft that
    already rebuilds its bytes, what the map knows about it (its data, the banks its calls reach), the best
@@ -102,7 +103,7 @@ for byte, with names, comments and constants instead of addresses. Use only the 
 3. Accepted, it's documented under its label's name. Before moving on, rename_symbol what you worked out about
    the names it uses, and add_note (no function) for what every agent here should know about this game.
 4. When you're stuck on a routine, release_function with precise notes (what's left, what you suspect) and
-   claim the next. One that turns out not to be a routine: correct_split or flag_for_review.
+   claim the next. One that turns out not to be a routine: {not_routine}.
 
 Be brief in your messages: work, don't narrate.
 """
@@ -290,6 +291,10 @@ HANDLERS: dict[str, Callable[..., str]] = {
     "split_function": lambda net, agent, slug, function, at, new_name="":
         net.split_function(agent, slug, function, at, new_name),
     "merge_function": lambda net, agent, slug, function: net.merge_function(agent, slug, function),
+    "create_function": lambda net, agent, slug, at, reason="", new_name="", notes="":
+        net.create_function(agent, slug, at, reason or notes, new_name),
+    "delete_function": lambda net, agent, slug, function, reason="", notes="":
+        net.delete_function(agent, slug, function, reason or notes),
     "correct_split": lambda net, agent, slug, kind, at, reason="", count=0, function="", notes="":
         net.correct_split(agent, slug, kind, at, reason or notes, count, function),
     "flag_for_review": lambda net, agent, slug, function, reason="", notes="":
@@ -312,7 +317,7 @@ HANDLERS: dict[str, Callable[..., str]] = {
         net.forks.split_file(agent, _fork(net, slug, "split_file"), path, at, new_name, data),
 }
 
-ROM_ONLY = {"get_context", "edit_context", "rename_symbol", "split_function", "merge_function", "correct_split", "probe_compiler", "explain_difference"}
+ROM_ONLY = {"get_context", "edit_context", "rename_symbol", "split_function", "merge_function", "create_function", "delete_function", "correct_split", "probe_compiler", "explain_difference"}
 FORK_ONLY = {"read_file", "search_code", "edit_file", "file_status", "split_file"}
 
 
@@ -463,9 +468,21 @@ def build_mcp(net: RomNetwork, agent_of: Callable[[Context], tuple[Agent, str]])
 
     @mcp.tool(meta=ALWAYS_LOAD)
     async def merge_function(ctx: Context, function: str) -> str:
-        """Join a function with its neighbour when the split cut one routine in two (Game Boy, Master System, NES):
+        """Join a function with its neighbour when the split cut one routine in two (Game Boy, Master System, NES, C64):
         it runs on (or jumps) into the next, or the one before runs on into it; nothing else may call the second."""
         return await run(ctx, "merge_function", function=function)
+
+    @mcp.tool(meta=ALWAYS_LOAD)
+    async def create_function(ctx: Context, at: str, reason: str, new_name: str = "") -> str:
+        """C64: add a routine the function finder missed (e.g. one reached only through a jump table). `at` is its
+        first instruction's address ($1A00); it runs to its first rts/rti/jmp or the next routine. Say how it's reached."""
+        return await run(ctx, "create_function", at=at, reason=reason, new_name=new_name)
+
+    @mcp.tool(meta=ALWAYS_LOAD)
+    async def delete_function(ctx: Context, function: str, reason: str) -> str:
+        """C64: remove a routine that isn't code (text, a table, sprite data); its bytes are kept as data, with your
+        reason. Say what the bytes are. create_function brings it back if it was code after all."""
+        return await run(ctx, "delete_function", function=function, reason=reason)
 
     @mcp.tool(meta=ALWAYS_LOAD)
     async def read_data(ctx: Context, what: str, length: int = 64, unit: str = "") -> str:

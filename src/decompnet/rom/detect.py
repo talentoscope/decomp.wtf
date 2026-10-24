@@ -53,7 +53,7 @@ def _program(data: bytes, name: str = "") -> Picked | None:
     return None
 
 
-def identify(src: bytes | Path, name: str = "", cue_track: int | None = None) -> Picked:
+def identify(src: bytes | Path, name: str = "", cue_track: int | None = None, log=None) -> Picked:
     """What the user picked: a ROM or program (bytes or a file), or a disc image (read from the file in place)."""
     if cue_track is not None and (not isinstance(src, (str, Path)) or Path(src).suffix.lower() != ".cue"):
         raise RomError("cue_track applies to a local CUE sheet")
@@ -80,7 +80,7 @@ def identify(src: bytes | Path, name: str = "", cue_track: int | None = None) ->
                     return picked
             raise RomError("this CHD doesn't hold a PlayStation disc this app can read")
         if path.stat().st_size <= SMALL:
-            return identify(path.read_bytes(), name)
+            return identify(path.read_bytes(), name, log=log)
         with open(path, "rb") as f:
             if psx.is_disc(f):
                 return _from_disc(f)
@@ -88,7 +88,7 @@ def identify(src: bytes | Path, name: str = "", cue_track: int | None = None) ->
     picked = _program(src, name)
     if picked is not None:
         return picked
-    found = c64.identify(src, name)
+    found = c64.identify(src, name, log=log)
     if found is not None:
         image, info = found
         return Picked("c64", image, "memory.c64", info, False)
@@ -101,7 +101,7 @@ def identify(src: bytes | Path, name: str = "", cue_track: int | None = None) ->
     raise RomError("this isn't a ROM, disc or game program this app can read: pick an N64 ROM (.z64, .n64, .v64), "
                    "a Game Boy or Game Boy Color ROM (.gb, .gbc), a Game Boy Advance ROM (.gba), an NES ROM (.nes), "
                    "a Master System or Game Gear ROM (.sms, .gg), a Commodore 64 program "
-                   "(.prg, .t64, .d64, .tap, .crt, .g64), a PlayStation 1 "
+                   "(.prg, .t64, .d64, .tap, .crt, .g64) or VICE snapshot (.vsf), a PlayStation 1 "
                    "or 2 disc image (.bin, .img, .iso, .cue, .chd) or its program file (e.g. SLUS_200.00)")
 
 

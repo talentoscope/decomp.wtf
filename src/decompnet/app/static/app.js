@@ -10,6 +10,11 @@ const pctOf = (best, insns) => (best == null ? null : Math.max(0, 1 - best / Mat
 /* A project's progress against what can be matched: functions set aside (assembly no compiler makes, data the split
    took for code) count apart, so a game written in assembly isn't stuck near 0% for good. */
 const progress = (p) => {
+  if (p.asm_only) {  // no C at all (the C64): routines documented out of those to document; not code is set aside
+    const t = p.asm_only, doc = p.documented || 0, room = (p.documented_bytes || 0) + (t.to_document_bytes || 0);
+    return { pct: room ? (100 * (p.documented_bytes || 0)) / room : 0, total: 0, room, doc,
+      asm: Math.max(0, (p.asm || 0) - (t.to_document || 0)), track: { done: doc, of: doc + (t.to_document || 0) } };
+  }
   // (routines documented in assembly are done, apart from C: they count in neither)
   const asm = p.asm || 0, doc = p.documented || 0, room = Math.max(0, (p.bytes || 0) - (p.asm_bytes || 0) - (p.documented_bytes || 0));
   return { pct: room ? (100 * (p.matched_bytes || 0)) / room : 0, total: Math.max(0, (p.functions || 0) - asm - doc), room, asm, doc };
@@ -229,7 +234,7 @@ async function showHome() {
       : `${esc(p.rom?.game_code || "")}${p.rom?.region ? " · " + esc(p.rom.region) : ""} · ${esc(p.compiler?.name || "")}`;
     a.innerHTML = `<div class="cc-top"><span class="plat">${esc(p.platform_name || "?")}</span><span class="meta">${esc(since(p.last_activity))}</span></div>
       <div><h4>${esc(p.title)}</h4><p class="meta">${meta}</p></div>
-      <div class="meter"><i></i></div><p class="meta"><b>${pctNum(pct)}%</b> of code · ${(p.matched || 0).toLocaleString()} / ${pr.total.toLocaleString()} functions${asideText(pr.asm)}</p>`;
+      <div class="meter"><i></i></div><p class="meta"><b>${pctNum(pct)}%</b> of code · ${pr.track ? `${pr.track.done.toLocaleString()} / ${pr.track.of.toLocaleString()} routines documented` : `${(p.matched || 0).toLocaleString()} / ${pr.total.toLocaleString()} functions`}${asideText(pr.asm)}</p>`;
     box.append(a);
     requestAnimationFrame(() => { a.querySelector(".meter i").style.width = pct + "%"; });
   }
@@ -742,7 +747,7 @@ async function poll(first) {
     const matches = [];
     for (const ev of live.events) {
       S.e = Math.max(S.e, ev.id);
-      if (["match", "split", "merge", "rename", "reopen", "review", "documented", "reviewed"].includes(ev.kind)) mapDirty = true;
+      if (["match", "split", "merge", "create", "delete", "rename", "reopen", "review", "documented", "reviewed"].includes(ev.kind)) mapDirty = true;
       if (!fresh(ev)) continue;
       if (ev.kind === "match") {
         S.flash.set(ev.detail, performance.now());
@@ -835,6 +840,7 @@ function renderHeader(ov) {
   $("phPct").textContent = pctNum(pct);
   $("phBar").style.width = pct + "%";
   $("phSub").textContent = fork && !ov.ready ? "set up the project to start"
+    : pr.track ? `${pr.track.done.toLocaleString()} / ${pr.track.of.toLocaleString()} routines documented${asideText(pr.asm)} · ${plural(ov.attempts || 0, "compile")}`
     : `${ov.matched.toLocaleString()} / ${pr.total.toLocaleString()} functions${pr.doc ? ` · ${pr.doc.toLocaleString()} documented` : ""}${asideText(pr.asm)}${linkedText(ov)} · ${plural(ov.attempts || 0, "compile")}${S.today ? ` · ${S.today} matched today` : ""}`;
   const w = workingAgents();
   $("phWorking").hidden = !w.n;
@@ -908,6 +914,12 @@ function renderStats(ov) {
     + (ov.documented ? ` · ${plural(ov.documented, "routine")} documented (${bytes(ov.documented_bytes)})` : "")
     + (ov.mapped ? ` · ${mappedText(ov)}` : "");
   $("fnCount").textContent = `${ov.matched.toLocaleString()} / ${pr.total.toLocaleString()}`;
+  $("pct").closest(".kpi").querySelector(".label").textContent = pr.track ? "Documented code" : "Matched code";
+  $("fnCount").closest(".kpi").querySelector(".label").textContent = pr.track ? "Routines" : "Functions";
+  if (pr.track) {  // the C64: documented routines, not matches
+    $("pctSub").textContent = `${bytes(ov.documented_bytes || 0)} of ${bytes(pr.room)} documented${pr.asm ? ` (${plural(pr.asm, "routine")} set aside as not code or for review)` : ""}`;
+    $("fnCount").textContent = `${pr.track.done.toLocaleString()} / ${pr.track.of.toLocaleString()}`;
+  }
   renderAutopilot(ov);
   renderSteering(ov);
   if (S.tab === "source") renderSource(ov);
@@ -2114,6 +2126,8 @@ function eventHtml(ev) {
     case "rename": return `${who} renamed ${esc(d)}`;
     case "split": return `${who} split ${esc(d)}`;
     case "merge": return `${who} joined ${esc(d)}`;
+    case "create": return `${who} added a routine the finder missed: ${esc(d)}`;
+    case "delete": return `${who} removed a routine that isn't code: ${esc(d)}`;
     case "review": return `${who} set ${esc(d)} aside for a person to review`;
     case "documented": return `<span class="ok">✓</span> ${who} documented ${fnLink(d)} in assembly`;
     case "reviewed": return `you looked over ${esc(d)}`;
@@ -3282,8 +3296,8 @@ $("unlockAllBtn").onclick = async () => {
   } catch (e) { toast(esc(e.message), "err"); }
 };
 $("resetProgressBtn").onclick = () => {
-  dialog("Start from scratch?", `<p>This clears all matches, compile attempts and best submissions, notes, stuck markers, and saved agent sessions for <b>${esc(S.ov.title)}</b>.</p>
-    <p>The imported function layout, symbols, headers, compiler, and project settings stay as they are. This can't be undone.</p>
+  dialog("Start from scratch?", `<p>This clears all matches, documented routines, compile attempts and best submissions, notes, stuck markers, review flags, and saved agent sessions for <b>${esc(S.ov.title)}</b>. Every rename agents made is reverted, and their header edits are dropped.</p>
+    <p>The imported function layout (with any splits and joins), the imported names and headers, the compiler, and project settings stay as they are. This can't be undone.</p>
     <div class="row"><button class="primary danger" id="resetProgressGo" type="button">Clear project progress</button><button class="ghost" data-close type="button">Cancel</button></div>`);
   $("resetProgressGo").onclick = async () => {
     const slug = S.slug, tab = S.tab;
@@ -3294,7 +3308,7 @@ $("resetProgressBtn").onclick = () => {
       document.body.classList.remove("locked");
       leaveProject();
       await openProject(slug, tab);
-      toast(`Reset complete: cleared ${plural(result.attempts, "compile")}, ${plural(result.notes, "note")}, and ${plural(result.sessions, "agent session")}.`);
+      toast(`Reset complete: cleared ${plural(result.attempts, "compile")}, ${plural(result.notes, "note")}, and ${plural(result.sessions, "agent session")}; reverted ${plural(result.renames || 0, "rename")}.`);
     } catch (e) { toast(esc(e.message), "err"); $("resetProgressGo").disabled = false; }
   };
 };

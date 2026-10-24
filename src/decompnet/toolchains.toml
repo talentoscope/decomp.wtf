@@ -333,6 +333,20 @@ sha256 = "86aee4017b26625cee8484c113558f48effa4cd47f7aa05fcf425604e5d2b23c"
 binary = "cloudflared.exe"
 platforms = ["windows-x86_64"]
 
+[vice]
+name = "VICE"
+kind = "tool"
+license = "GPL-2.0"
+source = "VICE-Team VICE 3.10 (GTK3 build)"
+description = "Commodore 64 emulator. decomp.wtf loads a tape in it (any loader, turbo ones too) and takes the RAM once the tape stops. Linux and Mac: install VICE from your package manager (apt install vice, brew install vice); decomp.wtf finds it on PATH."
+binary_name = "x64sc"
+binaries = { windows-x86_64 = ["bin/x64sc.exe"] }
+[[vice.parts]]
+url = "https://github.com/VICE-Team/svn-mirror/releases/download/3.10.0/GTK3VICE-3.10-win64.zip"
+sha256 = "beb3791d90e98f7e012c0028f26fbaa6545c8fce676f852a67f8ad893dee9d08"
+subdir = "GTK3VICE-3.10-win64"
+platforms = ["windows-x86_64"]
+
 
 # ------------------------------------------------------------------------------------------------
 # The decomp community's toolbelt. Downloaded on demand; every part is pinned to its release digest.

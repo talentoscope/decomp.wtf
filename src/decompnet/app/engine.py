@@ -87,6 +87,8 @@ TOOLS = {
     "wla-dx": "Master System and Game Gear: assembles routines documented in assembly (built from its source)",
     "cc65": "NES: assembles routines documented in assembly (ca65 and ld65, built from their source). "
             "Commodore 64 assembly is assembled with py65, which is installed with the app.",
+    "vice": "Commodore 64: loads tapes (turbo loaders too) and takes the RAM once they stop (47 MB; installs itself "
+            "on the first tape import)",
 }
 # Functions this small are handed out in batches (claim_function count): agents match most on the first try.
 BATCH_INSNS = 48
@@ -96,6 +98,8 @@ PLATFORM_COMPILERS = {"n64": ["gcc-2.7.2-kmc", "ido-7.1", "ido-5.3"], "psx": [tc
 # Platforms whose functions live in banks and are matched with SDCC (rom/gb_build.py), by the CPU they run.
 BANKED_PLATFORMS = ("gb", "gbc", "sms", "gg", "nes")
 BANKED_ARCHS = ("sm83", "z80", "mos6502")
+# Not banked, but cut and joined by their bytes the same way (split_function, merge_function): the C64's RAM
+CUT_BY_BYTES = ("6510",)
 # The assembly track's consoles: hand-written routines documented in RGBDS (Game Boy), WLA-DX (Master System, Game
 # Gear), ca65 (NES) or py65 (Commodore 64). 6510 is not a banked cartridge arch.
 ASM_ARCHS = ("sm83", "z80", "mos6502", "6510")
@@ -113,6 +117,7 @@ def _set_aside(meta: str | None) -> dict:
 
 _AUTO_TOKEN = re.compile(r"\b(?:func|D|B|jtbl|RO|STR|FLT|DBL)_[0-9A-F]{8}\b")
 _ADDRESS = re.compile(r"^(?:0x)?([0-9A-Fa-f]{8})$")
+_C64_ADDR = re.compile(r"^(?:\$|0x)([0-9A-Fa-f]{1,4})$")  # $8929 / 0x8929 on the C64
 
 LEGACY_GP_NOTE = """
 /* This game keeps small globals (8 bytes or less) in $gp-relative small data. Declare those here WITHOUT
@@ -289,6 +294,23 @@ class RomNetwork(Network):
     def _function(self, name: str, project: str | None):
         """Functions can also be named by address (0x80001234), handy for agents reading assembly, and the way
         agents write names they read elsewhere (see _loose_functions)."""
+        c64 = self._c64_addr(name, project)
+        if c64 is not None:
+            proj, a = c64
+            rows = self.store.all("SELECT * FROM functions WHERE project_id=? AND vram=?", proj["id"], a)
+            if len(rows) == 1:
+                return rows[0]
+            if rows:
+                raise NetworkError(f"${a:04X} starts a routine in several banks; use its name: "
+                                   + ", ".join(r["name"] for r in rows))
+            inside = self.store.one("SELECT name, vram FROM functions WHERE project_id=? AND vram<? AND vram+size>? "
+                                    "ORDER BY vram DESC LIMIT 1", proj["id"], a, a)
+            if inside is not None:
+                raise NetworkError(f"${a:04X} is inside {inside['name']} (it starts at ${inside['vram']:04X}, this is "
+                                   f"{a - inside['vram']} bytes in), not the start of a routine: "
+                                   f"get_function(\"{inside['name']}\")")
+            raise NetworkError(f"no routine starts at ${a:04X} and it is not inside one; "
+                               f"read the bytes with read_data(\"${a:04X}\", 32)")
         m = _ADDRESS.match(name.strip()) if name else None
         if m:
             proj = self._project(project)
@@ -321,6 +343,19 @@ class RomNetwork(Network):
             if near:
                 raise NetworkError(f"{e}. Did you mean: {', '.join(near)}?") from None
             raise
+
+    def _c64_addr(self, name: str | None, project: str | None):
+        """(project, address) when `name` is a C64 address written as $8929 or 0x8929; otherwise None."""
+        m = _C64_ADDR.match(name.strip()) if name else None
+        if not m:
+            return None
+        try:
+            proj = self._project(project)
+        except NetworkError:
+            return None
+        if self.cfg(proj).get("platform") != "c64":
+            return None
+        return proj, int(m.group(1), 16)
 
     def _near_names(self, name: str, project: str | None, n: int = 5) -> list[str]:
         """Function names close to one that doesn't exist (a typo, another spelling of the symbol)."""
@@ -524,7 +559,7 @@ class RomNetwork(Network):
         if project_file is not None:  # a dtk-template or ds-decomp project, worked on like a fork
             compiler = toolchain if toolchain and toolchain.startswith(("GC/", "Wii/", "DS/")) else None
             return self.forks.create_scratch(project_file, compiler=compiler, log=log)
-        picked = detect.identify(data, name, cue_track=cue_track)
+        picked = detect.identify(data, name, cue_track=cue_track, log=log)
         rom, info = picked.data, picked.info
         if picked.platform == "psx" and info.get("disc"):
             from ..rom.mapping import file_digest
@@ -824,10 +859,22 @@ class RomNetwork(Network):
                       "confirmed_at": time.time()},
             "context": {"file": None},
             "built_with": None,
+            "coverage": report.get("coverage") or {},
         }
-        meta = json.dumps({"asm_code": "hand-written 6510 machine code"})
-        how = "emulated" if info.get("method") == "emulated" else "static"
-        description = (f"Commodore 64 · entry ${info.get('entry', 0):04X} ({how}) · {len(fns)} functions")
+        found = report.get("found") or {}
+
+        def meta_of(f) -> str:
+            """Certain functions are reached from a real entry point; probable ones were scored from bytes no code
+            reaches, and an agent can find they aren't code at all."""
+            how = found.get(f.vram) or {"confidence": "certain"}
+            extra = {"c64_found": how["confidence"], "c64_why": how.get("why") or ""}
+            if how["confidence"] == "probable":
+                extra["c64_score"] = how.get("score")
+            return json.dumps({"asm_code": "hand-written 6510 machine code", **extra})
+        how = info.get("method") or "static"
+        probable = sum(1 for v in found.values() if v.get("confidence") == "probable")
+        description = (f"Commodore 64 · entry ${info.get('entry', 0):04X} ({how}) · {len(fns)} functions"
+                       + (f" ({probable} probable)" if probable else ""))
         now = time.time()
         with self.store.tx() as db:
             pid = db.execute(
@@ -841,7 +888,7 @@ class RomNetwork(Network):
                     "INSERT INTO functions(project_id,name,size,n_insns,target,relocs,asm,seed,unit,vram,rom_offset,"
                     "status,meta) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (pid, name, f.size, f.n_insns, f.code, json.dumps([list(r) for r in f.refs or []]),
-                     f.asm, None, "ram", f.vram, f.rom, "asm", meta))
+                     f.asm, None, "ram", f.vram, f.rom, "asm", meta_of(f)))
                 db.execute("INSERT INTO symbols(project_id,name,address,size,kind,preview) VALUES(?,?,?,?,?,?)",
                            (pid, name, f.vram, f.size, "func", None))
             for name, addr, kind, desc in c64_hw.symbols():
@@ -1402,10 +1449,20 @@ class RomNetwork(Network):
             return self._read_banked(proj, what, length, unit)
         syms = self.symbols(proj["id"], unit)
         m = _ADDRESS.match(what.strip())
+        if proj["arch"] == "6510" and not syms.by_name.get(what.strip()):  # C64 addresses as written: $0801, 0x0801, 0801
+            m = re.fullmatch(r"(?:0x|\$)?0*([0-9A-Fa-f]{1,4})", what.strip()) or m
         addr = int(m.group(1), 16) if m else syms.resolve(what.strip())
         if addr is None:
             raise NetworkError(f"`{what}` is not an address or a known symbol")
         length = max(4, min(int(length), 512))
+        if proj["arch"] == "6510" and (held := self._c64_held(proj)):
+            lo, hi = held
+            if lo <= addr < hi:
+                return f"{syms.label(addr)} at ${addr:04X}: not part of the machine code; there is nothing here to read."
+            if addr < lo < addr + length:
+                length = lo - addr
+        if proj["arch"] == "6510":
+            return self._read_c64(proj, syms, addr, length)
         data = self.reader(proj, unit)(addr, length)
         head = f"{syms.label(addr)} at 0x{addr:08X}"
         if data is None:
@@ -1427,6 +1484,98 @@ class RomNetwork(Network):
         if any(1e-6 < abs(f) < 1e7 for f in floats):
             out.append("as f32: " + ", ".join(f"{f:g}" for f in floats))
         return "\n".join(out)
+
+    _C64_WRITES = ("sta", "stx", "sty", "inc", "dec", "asl", "lsr", "rol", "ror")
+
+    def _read_c64(self, proj, syms, addr: int, length: int) -> str:
+        """read_data on the C64: the RAM as the program left it once loaded, by $-address, its 16-bit words low byte
+        first, which routine holds the first byte (and whether it's an operand inside an instruction), and which
+        routines read, write or index into the bytes shown, so an agent doesn't have to work any of that out."""
+        from ..rom import mos6502
+        from ..rom.c64 import _mem_operand
+
+        data = self.reader(proj)(addr, length)
+        label = syms.label(addr)
+        head = f"${addr:04X}" if re.fullmatch(r"(?:D_|0x|\$)?[0-9A-Fa-f]+", label) else f"{label} at ${addr:04X}"
+        if not data:
+            return f"{head}: not in the program's memory as the project holds it."
+        end = addr + len(data)
+        out = [f"{head} (bytes as they were once the program had loaded; it may change them as it runs)"]
+        flat = self._lane(proj, "6510").flat_of(addr, 0)
+        for d in self.store.all("SELECT * FROM data_regions WHERE project_id=? AND rom_offset<? AND rom_offset+size>? "
+                                "AND why LIKE 'not code%'", proj["id"], flat + len(data), flat):
+            out.append(f"recorded as data from ${d['rom_offset'] - flat + addr:04X}, {d['size']} bytes: {d['why']}")
+        for i in range(0, len(data), 16):
+            chunk = data[i:i + 16]
+            out.append(f"  {addr + i:04X}: {chunk.hex(' '):<47}  {''.join(chr(c) if 32 <= c < 127 else '.' for c in chunk)}")
+        words = [int.from_bytes(data[i:i + 2], "little") for i in range(0, min(len(data), 32) - 1, 2)]
+        if words:
+            out.append(f"as 16-bit words from ${addr:04X} (low byte first): " + " ".join(f"${w:04X}" for w in words))
+        rows = self.store.all("SELECT name, vram, size, target FROM functions WHERE project_id=? ORDER BY vram",
+                              proj["id"])
+        uses: list[tuple[int, str]] = []
+        insns: list[tuple[int, str, str]] = []  # instructions that start in the bytes shown, as their routine decodes them
+        where = ""
+        for r in rows:
+            code, base = bytes(r["target"] or b""), r["vram"]
+            if not code or base is None:
+                continue
+            for a, text, n in mos6502.disassemble(code, base):
+                if addr <= a < end:
+                    insns.append((a, r["name"], text))
+                if not where and a <= addr < a + n:
+                    where = (f"${addr:04X} is the first byte of `{text}` in {r['name']}" if a == addr else
+                             f"${addr:04X} is an operand byte of `{text}` at ${a:04X} in {r['name']} (code that "
+                             "changes it changes that instruction)")
+                mem = _mem_operand(text)
+                if mem is None:
+                    continue
+                op = text.split(" ", 1)[0]
+                verb = "written" if op in self._C64_WRITES else "read"
+                if addr <= mem < end:
+                    uses.append((mem, f"${mem:04X} {verb} by {r['name']} at ${a:04X} (`{text}`)"))
+                elif re.search(r",\s*[xy]\s*$", text) and "(" not in text and mem < addr <= mem + 255:
+                    uses.append((mem, f"{verb} through ${mem:04X} plus an index by {r['name']} at ${a:04X} "
+                                      f"(`{text}`), which may reach here"))
+        owner = next((r for r in rows if r["vram"] is not None and r["vram"] <= addr < r["vram"] + (r["size"] or 0)),
+                     None)
+        if where:
+            out.append(where + ".")
+        elif owner is not None:
+            out.append(f"${addr:04X} is inside {owner['name']}, in bytes its instructions skip over (data).")
+        else:
+            out.append(f"${addr:04X} is between routines: no routine's code covers it, so it is most likely a "
+                       "variable or a table.")
+        shown = 40
+        if insns:
+            insns.sort()
+            names = list(dict.fromkeys(n for _a, n, _t in insns))
+            out.append(f"as code ({', '.join(names)}), decoded for you; don't decode the hex yourself:")
+            out += [f"  {a:04X}  {t}" for a, _n, t in insns[:shown]]
+            if len(insns) > shown:
+                out.append(f"  ... {len(insns) - shown} more instructions: read_data(\"${insns[shown][0]:04X}\")")
+        elif owner is None:
+            guess = [(a, t) for a, t, _n in mos6502.disassemble(data, addr)][:16]
+            if guess:
+                out.append("no routine covers these bytes, so they are probably data; only if they are code, they "
+                           "would decode as:")
+                out += [f"  {a:04X}  {t}" for a, t in guess]
+        if uses:
+            uses.sort()
+            out.append("used by the code: " + "; ".join(u for _m, u in uses[:16])
+                       + (f"; and {len(uses) - 16} more" if len(uses) > 16 else "") + ".")
+        else:
+            out.append("no routine reads or writes these bytes by their address (a pointer may still reach them).")
+        return "\n".join(out)
+
+    def _c64_held(self, proj) -> tuple[int, int] | None:
+        """A C64 program's BASIC part, which agents never read: the range from the load address to BASIC's end, unless
+        the program was unpacked over its own BASIC stub (the entry is inside it, so those bytes are code now)."""
+        rom = self.cfg(proj).get("rom") or {}
+        lo, hi, entry = int(rom.get("load") or 0), int(rom.get("basic_end") or 0), int(rom.get("entry") or 0)
+        if not 0 < lo < hi or lo <= entry < hi:
+            return None
+        return lo, hi
 
     def _read_banked(self, proj, what: str, length: int, unit: str) -> str:
         """read_data on the Game Boy, Master System and NES: an address as these games write it (`0xC0A0`, `$C0A0`,
@@ -1486,7 +1635,7 @@ class RomNetwork(Network):
             raise NetworkError("mapped function boundaries belong to the profile; v1 preserves existing targets")
         if fn["status"] == "matched":
             raise NetworkError(f"{fn['name']} is matched; it can't be split")
-        if (arch := (self.cfg(proj).get("arch") or "").lower()) in BANKED_ARCHS:
+        if (arch := (self.cfg(proj).get("arch") or "").lower()) in BANKED_ARCHS + CUT_BY_BYTES:
             return self._split_banked(agent, proj, arch, fn, str(at), new_name)
         m = _ADDRESS.match(str(at).strip())
         if not m:
@@ -1537,6 +1686,10 @@ class RomNetwork(Network):
         them (twins.PIECES, as the pass that runs when agents start would), else open."""
         from .twins import PIECES
 
+        if arch == "6510":  # every C64 routine is on the assembly track: a cut or joined one is documented afresh
+            meta = {k: v for k, v in meta.items() if k != "sample"}
+            meta.setdefault("asm_code", "hand-written 6510 machine code")
+            return "asm", json.dumps(meta)
         if meta.get("for_agents"):  # a person gave it back to agents: the rules don't take it again
             return "open", json.dumps(meta)
         reason, longest = PIECES[arch]
@@ -1553,7 +1706,10 @@ class RomNetwork(Network):
         code, cpu, flat = bytes(fn["target"]), fn["vram"] or 0, fn["rom_offset"] or 0
         head, tail = code[:off], code[off:]
         hs, hmeta = self._banked_status(lane.arch, head, cpu, json.loads(fn["meta"] or "{}"))
-        ts, tmeta = self._banked_status(lane.arch, tail, cpu + off, {"split_from": fn["name"]})
+        tail_meta = {"split_from": fn["name"]}
+        if lane.arch == "6510":
+            tail_meta |= {"c64_found": "split", "c64_why": f"split from {fn['name']} by an agent"}
+        ts, tmeta = self._banked_status(lane.arch, tail, cpu + off, tail_meta)
         db.execute("UPDATE functions SET size=?, n_insns=?, target=?, relocs=?, asm=?, seed=NULL, best_score=NULL, "
                    "status=?, meta=? WHERE id=?", (len(head), len(lane.insns(head, cpu)), head,
                                                    json.dumps(lane.refs(head, cpu, flat)), lane.listing(head, cpu),
@@ -1566,7 +1722,10 @@ class RomNetwork(Network):
         db.execute("UPDATE symbols SET size=? WHERE project_id=? AND name=?", (len(head), proj["id"], fn["name"]))
         db.execute("INSERT OR REPLACE INTO symbols(project_id,name,address,size,kind) VALUES(?,?,?,?,?)",
                    (proj["id"], new_name, cpu + off, len(tail), "func"))
-        if hs == "asm":  # nobody works on what no C writes
+        if lane.arch in CUT_BY_BYTES:  # documented notes were about the old bytes
+            db.execute("UPDATE functions SET matched_source=NULL, matched_agent_id=NULL, matched_at=NULL WHERE id=?",
+                       (fn["id"],))
+        elif hs == "asm":  # nobody works on what no C writes
             db.execute("DELETE FROM claims WHERE function_id=?", (fn["id"],))
         return hs, ts
 
@@ -1586,13 +1745,34 @@ class RomNetwork(Network):
         db.execute("DELETE FROM functions WHERE id=?", (nxt["id"],))
         db.execute("DELETE FROM symbols WHERE project_id=? AND name=?", (proj["id"], nxt["name"]))
         db.execute("UPDATE symbols SET size=? WHERE project_id=? AND name=?", (len(code), proj["id"], fn["name"]))
-        if status == "asm":
+        if lane.arch in CUT_BY_BYTES:  # documented notes were about the old bytes
+            db.execute("UPDATE functions SET matched_source=NULL, matched_agent_id=NULL, matched_at=NULL WHERE id=?",
+                       (fn["id"],))
+        elif status == "asm":
             db.execute("DELETE FROM claims WHERE function_id=?", (fn["id"],))
         return status
 
     def _layout_changed(self, project_id: int) -> None:
         for cache in (self._xrefs, self._ops, self._syms):
             cache.pop(project_id, None)
+
+    def reset_project_progress(self, slug: str) -> dict[str, int]:
+        proj = self._project(slug)
+        labels: set[str] = set()
+        if self.cfg(proj).get("platform") == "c64":  # labels agents added through the header go with their edits
+            base = {m.group(1) for r in self.store.all("SELECT header FROM context_versions WHERE project_id=? AND "
+                                                       "agent_id IS NULL", proj["id"])
+                    for m in self._C64_DEFINE.finditer(r["header"] or "")}
+            labels = {m.group(1) for r in self.store.all("SELECT header FROM context_versions WHERE project_id=? AND "
+                                                         "agent_id IS NOT NULL", proj["id"])
+                      for m in self._C64_DEFINE.finditer(r["header"] or "")} - base
+        out = super().reset_project_progress(slug)
+        if labels:
+            with self.store.tx() as db:
+                for name in labels:
+                    db.execute("DELETE FROM symbols WHERE project_id=? AND name=? AND kind='data'", (proj["id"], name))
+        self._layout_changed(proj["id"])  # the names went back: nothing cached may keep the new ones
+        return out
         with self.twins._lock:
             self.twins._prints.pop(project_id, None)
 
@@ -1621,6 +1801,10 @@ class RomNetwork(Network):
             hs, ts = self._banked_cut(db, proj, lane, fn, off, new_name)
             self._event(db, proj["id"], agent.id, "split", f"{fn['name']} / {new_name}")
         self._layout_changed(proj["id"])
+        if arch in CUT_BY_BYTES:
+            return (f"\u2705 split: {fn['name']} is now {off} bytes; {new_name} at ${addr:04X} has {len(code) - off}. Both "
+                    f"are on the assembly track: continue documenting {fn['name']} (get_function shows its new "
+                    f"listing); {new_name} goes to the queue for its own write-up.")
         aside = [n for n, s in ((fn["name"], hs), (new_name, ts)) if s == "asm"]
         return (f"✅ split: {fn['name']} is now {off} bytes; {new_name} at 0x{addr:04x} has {len(code) - off}."
                 + (f" Set aside: {', '.join(aside)} (no C writes code like that, as the set-aside rules see it)."
@@ -1630,8 +1814,8 @@ class RomNetwork(Network):
     def merge_function(self, agent: Agent, project: str | None, function: str) -> str:
         """Join `function` with its neighbour in the ROM when the split cut one routine in two: it runs on into the
         next function (or jumps into it), or the one before runs on (or jumps) into it, which is how the second half
-        an agent is given looks. Only on the banked lanes (Game Boy, Master System, NES) for now, and never when
-        something else calls or jumps to the second half: then it's a function of its own."""
+        an agent is given looks. Only on the banked lanes (Game Boy, Master System, NES) and the C64 for now, and
+        never when something else calls or jumps to the second half: then it's a function of its own."""
         self._rom_only(project, "merge_function")
         link = self._link(project)
         if link is not None:
@@ -1643,8 +1827,8 @@ class RomNetwork(Network):
         fn = self._function(function, project)
         proj = self.store.one("SELECT * FROM projects WHERE id=?", fn["project_id"])
         arch = (self.cfg(proj).get("arch") or "").lower()
-        if arch not in BANKED_ARCHS:
-            raise NetworkError("merge_function is for Game Boy, Master System and NES projects for now")
+        if arch not in BANKED_ARCHS + CUT_BY_BYTES:
+            raise NetworkError("merge_function is for Game Boy, Master System, NES and C64 projects for now")
         lane = self._lane(proj, arch)
         flat = fn["rom_offset"] or 0
 
@@ -1687,11 +1871,142 @@ class RomNetwork(Network):
             self._event(db, proj["id"], agent.id, "merge", f"{second['name']} into {first['name']}")
         self._layout_changed(proj["id"])
         size = (first["size"] or 0) + (second["size"] or 0)
+        if arch in CUT_BY_BYTES:
+            return (f"\u2705 merged: {second['name']} is part of {first['name']} now ({size} bytes). Document it as one "
+                    f"routine (get_function shows the joined listing); if it still runs on into the next one, "
+                    f"merge_function again.")
         return (f"✅ merged: {second['name']} is part of {first['name']} now ({size} bytes)."
                 + (" Set aside: no C writes code like that, as the set-aside rules see it (it may run on into the next "
                    "function too: merge_function again)." if status == "asm" else
                    f" Continue with {first['name']}: claim_function(\"{first['name']}\") (get_function shows its "
                    "assembly)."))
+
+    CREATE_LONGEST = 512  # bytes create_function follows from its start looking for the routine's end
+
+    @staticmethod
+    def _agent_reason(reason: str, example: str) -> str:
+        reason = " ".join(str(reason or "").split())
+        if len(reason) < 20:
+            raise NetworkError(f"say why in a sentence ({example})")
+        return reason[:500]
+
+    def _c64_only(self, project: str | None, what: str):
+        """The C64 project an agent's create_function or delete_function is for: not in a room (its host decides)."""
+        self._rom_only(project, what)
+        if self._link(project) is not None:
+            raise NetworkError(f"in a room, {what} is the host's: leave a note (add_note) saying what you found")
+        proj = self._project(project)
+        if self.cfg(proj).get("platform") != "c64":
+            raise NetworkError(f"{what} is for C64 projects for now")
+        return proj
+
+    def create_function(self, agent: Agent, project: str | None, at: str, reason: str, new_name: str = "") -> str:
+        """An agent adds a routine the function finder missed (reached only through a jump table, say). Its bytes run
+        from `at` to its first rts, rti or jmp, or to the next routine; it goes on the assembly track like a cut-off
+        part. C64 only for now."""
+        proj = self._c64_only(project, "create_function")
+        m = _C64_ADDR.match(str(at or "").strip())
+        if not m:
+            raise NetworkError("`at` must be the address where the routine starts, like $1A00")
+        addr = int(m.group(1), 16)
+        reason = self._agent_reason(reason, 'how it is reached, e.g. "jump table at $1F00, entry 3, jumps here"')
+        held = self._c64_held(proj)
+        if held is not None and held[0] <= addr < held[1]:
+            raise NetworkError(f"${addr:04X} is in the program's BASIC, which isn't machine code")
+        rows = self.store.all("SELECT * FROM functions WHERE project_id=?", proj["id"])
+        for r in rows:
+            lo = r["vram"]
+            if lo is None:
+                continue
+            if lo == addr:
+                raise NetworkError(f"{r['name']} already starts at ${addr:04X}")
+            if lo < addr < lo + (r["size"] or 0):
+                raise NetworkError(f"${addr:04X} is inside {r['name']} (it starts at ${lo:04X}, {r['size']} bytes): cut "
+                                   f"it there with split_function(\"{r['name']}\", at=\"${addr:04X}\")")
+        nxt = min((r["vram"] for r in rows if r["vram"] is not None and r["vram"] > addr), default=0x10000)
+        limit = min(nxt, addr + self.CREATE_LONGEST, 0x10000)
+        data = self.reader(proj)(addr, limit - addr) or b""
+        if not data:
+            raise NetworkError(f"${addr:04X} isn't in the program's memory as the project holds it")
+        lane = self._lane(proj, "6510")
+        size, end = 0, ""
+        for a, text, n in lane.insns(data, addr):
+            text = text.strip()
+            if text.startswith(("db ", "brk")) or a + n > limit:
+                if size == 0:
+                    raise NetworkError(f"${addr:04X} doesn't decode as code (`{text}`): it's data, or the routine starts "
+                                       "elsewhere. read_data shows the bytes")
+                end = f"it stops before `{text}` at ${a:04X}, which isn't an instruction"
+                break
+            size += n
+            if lane.flow(text)[0] in ("ret", "jump"):
+                end = f"it ends with `{text}` at ${a:04X}"
+                break
+        else:
+            if addr + size >= nxt:
+                end = f"it runs on into the routine at ${nxt:04X}"
+            else:
+                raise NetworkError(f"no rts, rti or jmp within {self.CREATE_LONGEST} bytes of ${addr:04X}: it probably "
+                                   "isn't the start of a routine")
+        code = data[:size]
+        flat = lane.flat_of(addr, 0)
+        new_name = (new_name or lane.name(flat, addr)).strip()
+        if not self._free_name(proj["id"], new_name):
+            raise NetworkError(f"`{new_name}` is not a free name")
+        status, meta = self._banked_status("6510", code, addr, {"c64_found": "agent",
+                                                               "c64_why": f"created by {agent.name}: {reason}"})
+        unit = rows[0]["unit"] if rows else "ram"
+        with self.store.tx() as db:
+            db.execute("DELETE FROM data_regions WHERE project_id=? AND rom_offset<? AND rom_offset+size>?",
+                       (proj["id"], flat + size, flat))
+            db.execute("INSERT INTO functions(project_id,name,size,n_insns,target,relocs,asm,seed,unit,vram,rom_offset,"
+                       "status,meta) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                       (proj["id"], new_name, size, len(lane.insns(code, addr)), code,
+                        json.dumps(lane.refs(code, addr, flat)), lane.listing(code, addr), None, unit, addr, flat,
+                        status, meta))
+            db.execute("INSERT OR REPLACE INTO symbols(project_id,name,address,size,kind) VALUES(?,?,?,?,?)",
+                       (proj["id"], new_name, addr, size, "func"))
+            self._event(db, proj["id"], agent.id, "create", f"{new_name} at ${addr:04X}: {reason}")
+        self._layout_changed(proj["id"])
+        return (f"\u2705 created: {new_name} at ${addr:04X}, {size} bytes; {end}. It's on the assembly track and goes "
+                "to the queue for its own write-up (get_function shows it). If it's cut wrong, split_function or "
+                "merge_function it.")
+
+    def delete_function(self, agent: Agent, project: str | None, function: str, reason: str) -> str:
+        """An agent removes a routine that isn't code (text, a table, sprite data): its bytes are recorded as data,
+        with why. create_function brings it back. C64 only for now."""
+        proj = self._c64_only(project, "delete_function")
+        fn = self._function(function, project)
+        reason = self._agent_reason(reason, 'what the bytes are, e.g. "sprite data: 63-byte rows read through $07F8"')
+        held = self.store.one("SELECT agent_id FROM claims WHERE function_id=?", fn["id"])
+        if held is not None and held["agent_id"] != agent.id:
+            raise NetworkError(f"{fn['name']} is being worked on by {self._agent_name(held['agent_id'])}: leave a note "
+                               "(add_note)")
+        if fn["status"] == "documented" and fn["matched_agent_id"] != agent.id:
+            raise NetworkError(f"{fn['name']} was documented as code by {self._agent_name(fn['matched_agent_id'])}: if "
+                               "that's wrong, flag_for_review it so a person decides")
+        rows = self.store.all("SELECT * FROM functions WHERE project_id=?", proj["id"])
+        links = self._c64_links(proj, rows)
+        callers = [r for r in rows if r["id"] != fn["id"] and any(i == fn["id"] for i, _h in links.get(r["id"], []))]
+        known = [r["name"] for r in callers if r["status"] == "documented"]
+        if known:
+            raise NetworkError(f"{', '.join(known[:3])}{' and more' if len(known) > 3 else ''} documented as code that "
+                               f"reaches {fn['name']}: if they're wrong, flag_for_review so a person decides")
+        flat, size, cpu = fn["rom_offset"] or 0, fn["size"] or 0, fn["vram"] or 0
+        with self.store.tx() as db:
+            db.execute("INSERT OR REPLACE INTO data_regions(project_id,rom_offset,size,kind,why) VALUES(?,?,?,?,?)",
+                       (proj["id"], flat, size, "data", f"not code (deleted {fn['name']}, {agent.name}): {reason}"))
+            for table in ("claims", "twin_misses", "notes"):
+                db.execute(f"DELETE FROM {table} WHERE function_id=?", (fn["id"],))
+            db.execute("DELETE FROM functions WHERE id=?", (fn["id"],))
+            db.execute("DELETE FROM symbols WHERE project_id=? AND name=? AND kind='func'", (proj["id"], fn["name"]))
+            self._event(db, proj["id"], agent.id, "delete", f"{fn['name']} at ${cpu:04X}: {reason}")
+        self._layout_changed(proj["id"])
+        still = [r["name"] for r in callers]
+        return (f"\u2705 deleted: {fn['name']} is gone and its {size} bytes at ${cpu:04X} are recorded as data. "
+                + (f"{', '.join(still[:3])}{' and more' if len(still) > 3 else ''} still reach those bytes as if they "
+                   "were code: look at them when they come to you, they may not be code either. " if still else "")
+                + f"If it was code after all, create_function(\"${cpu:04X}\", reason=...) brings it back.")
 
     def _mirror_banked_layout(self, proj, functions: list[dict]) -> None:
         """A room member's copy of a banked game follows the host's joins and cuts, by ROM offset (CPU addresses are
@@ -1805,9 +2120,15 @@ class RomNetwork(Network):
                 link.sync()
             return text
         old, new = old.strip(), new.strip()
-        if not (IDENT.match(old) and IDENT.match(new)):
-            raise NetworkError("old and new must be C identifiers")
         syms = self.symbols(proj["id"])
+        c64 = self._c64_addr(old, project)
+        if c64 is not None:  # name a C64 address directly: $695A or 0x695A
+            at = syms.by_addr.get(c64[1])
+            old = at.name if at is not None else f"D_{c64[1]:08X}"
+        if not (IDENT.match(old) and IDENT.match(new)):
+            raise NetworkError("old and new must be C identifiers"
+                               + (" (old can also be an address like $695A)" if self.cfg(proj).get("platform") == "c64"
+                                  else ""))
         if old not in syms.by_name and (m := re.fullmatch(r"func_(\d{3})_([0-9a-fA-F]{4})", old)):
             # an automatic name from an older listing (the function has a name now): banks share CPU addresses,
             # so its bank finds it, and what it's called now is what's renamed
@@ -2130,8 +2451,14 @@ class RomNetwork(Network):
         if self._link(project) is not None:
             raise NetworkError("in a room, leave a note on it (add_note) and release it: the room's host decides")
         fn = self._function(function, project)
-        if fn["status"] != "open":
+        on_asm = self.asm_track(fn)  # a hand-written routine (C64, Game Boy...): it leaves the assembly track instead
+        if fn["status"] != "open" and not on_asm:
             raise NetworkError(f"{fn['name']} isn't open ({fn['status']}): nothing to set aside")
+        if on_asm:
+            other = self.store.one("SELECT agent_id FROM claims WHERE function_id=?", fn["id"])
+            if other is not None and other["agent_id"] != agent.id:
+                raise NetworkError(f"{fn['name']} is claimed by {self._agent_name(other['agent_id'])}: leave a note "
+                                   "(add_note)")
         reason = " ".join(str(reason or "").split())
         if len(reason) < 20:
             raise NetworkError("say what a person should look at, in a sentence: why no C writes it, or what's wrong "
@@ -2143,9 +2470,11 @@ class RomNetwork(Network):
                                "notes instead (release_function)")
         meta = {k: v for k, v in json.loads(fn["meta"] or "{}").items() if k != "for_agents"}
         meta |= {"review": reason[:1000], "review_by": agent.name, "review_at": time.time()}
+        if on_asm:
+            meta["review_track"] = "asm"  # (given back, it returns to the assembly track: see give_to_agents)
         with self.store.tx() as db:
-            if not db.execute("UPDATE functions SET status='asm', meta=? WHERE id=? AND status='open'",
-                              (json.dumps(meta), fn["id"])).rowcount:
+            if not db.execute("UPDATE functions SET status='asm', meta=? WHERE id=? AND status=?",
+                              (json.dumps(meta), fn["id"], fn["status"])).rowcount:
                 raise NetworkError(f"{fn['name']} changed meanwhile: look at it again")
             db.execute("DELETE FROM claims WHERE function_id=?", (fn["id"],))
             db.execute("INSERT INTO notes(project_id,function_id,agent_id,text,created_at) VALUES(?,?,?,?,?)",
@@ -2547,20 +2876,113 @@ class RomNetwork(Network):
                 db.execute("INSERT INTO claims VALUES(?,?,?,?)", (fn["id"], agent.id, now, now + self.claim_ttl))
                 self._event(db, fn["project_id"], agent.id, "claim", fn["name"])
             else:
-                fn = None
-                for row in db.execute(
+                cands = [row for row in db.execute(
                         "SELECT f.* FROM functions f WHERE f.project_id=? AND f.status='asm' AND f.id NOT IN "
                         "(SELECT function_id FROM claims) ORDER BY f.abandons >= ?, f.name IN (SELECT detail FROM events "
                         "WHERE project_id=? AND agent_id=? AND kind='release'), f.n_insns, f.rom_offset",
-                        (proj["id"], GIVEN_UP, proj["id"], agent.id)):
-                    if self.asm_track(row):
-                        fn = row
-                        break
+                        (proj["id"], GIVEN_UP, proj["id"], agent.id)) if self.asm_track(row)]
+                if cands and self.cfg(proj).get("platform") == "c64":
+                    cands = self._c64_bottom_up(db, proj, agent, cands)
+                fn = cands[0] if cands else None
                 if fn is None:
                     return None
                 db.execute("INSERT INTO claims VALUES(?,?,?,?)", (fn["id"], agent.id, now, now + self.claim_ttl))
                 self._event(db, fn["project_id"], agent.id, "claim", fn["name"])
         return fn
+
+    def _c64_links(self, proj, rows) -> dict[int, list[tuple[int, str]]]:
+        """How each C64 routine leads into others, read from its bytes (worked out each time, so splits, merges and
+        set-asides never leave it stale): a jsr or jmp to another routine's start, a jump or branch into the middle of
+        one, and running on into the routine right after it (no rts, rti or jmp at its end). {id: [(other id, how)]}"""
+        import bisect
+
+        lane = self._lane(proj, "6510")
+        spans = sorted((r["vram"], r["vram"] + (r["size"] or 0), r["id"]) for r in rows if r["vram"] is not None)
+        los = [s[0] for s in spans]
+        widest = max((hi - lo for lo, hi, _i in spans), default=0)
+        at_flat = {r["rom_offset"]: r for r in rows if r["rom_offset"] is not None}
+        out: dict[int, list[tuple[int, str]]] = {}
+        for r in rows:
+            links: list[tuple[int, str]] = []
+            code, cpu = bytes(r["target"] or b""), r["vram"]
+            if code and cpu is not None:
+                for _a, text, _n in lane.insns(code, cpu):
+                    text = text.strip()
+                    kind, target = lane.flow(text)
+                    if kind not in ("call", "jump", "cjump") or target is None or cpu <= target < cpu + len(code):
+                        continue
+                    k = bisect.bisect_right(los, target) - 1
+                    while k >= 0 and spans[k][0] >= target - widest:
+                        lo, hi, i = spans[k]
+                        k -= 1
+                        if i == r["id"] or not lo <= target < hi:
+                            continue
+                        if target == lo:
+                            how = "calls it" if kind == "call" else "jumps to it" if kind == "jump" else f"`{text}` branches to it"
+                        else:
+                            how = f"`{text}` goes into it, {target - lo} bytes in"
+                        links.append((i, how))
+                if r["rom_offset"] is not None and lane.falls_through(code, cpu):
+                    nxt = at_flat.get(r["rom_offset"] + (r["size"] or 0))
+                    if nxt is not None and nxt["id"] != r["id"] and lane.bank(nxt["rom_offset"]) == lane.bank(r["rom_offset"]):
+                        links.append((nxt["id"], "runs on into it: no rts, rti or jmp at the end"))
+            out[r["id"]] = links
+        return out
+
+    def _c64_calls(self, proj, rows) -> dict[int, set[int]]:
+        """The routines each C64 routine depends on: what it calls, jumps or branches into, or runs on into."""
+        return {k: {i for i, _how in v} for k, v in self._c64_links(proj, rows).items()}
+
+    def _c64_bottom_up(self, db, proj, agent: Agent, cands: list) -> list:
+        """C64 routines in the order to document them: those whose callees are all documented (or set aside) first, so
+        leaves come before their callers; among them a caller of the routine this agent just documented (walking back
+        up its call chain), then the smallest. Call loops leave none ready: then the fewest undocumented callees."""
+        rows = db.execute("SELECT * FROM functions WHERE project_id=?", (proj["id"],)).fetchall()
+        calls = self._c64_calls(proj, rows)
+        pending = {r["id"] for r in rows if self.asm_track(r)}
+        last = db.execute("SELECT detail FROM events WHERE project_id=? AND agent_id=? AND kind='documented' "
+                          "ORDER BY id DESC LIMIT 1", (proj["id"], agent.id)).fetchone()
+        last_id = next((r["id"] for r in rows if last is not None and r["name"] == last["detail"]), None)
+        released = {e["detail"] for e in db.execute("SELECT detail FROM events WHERE project_id=? AND agent_id=? AND "
+                                                    "kind='release'", (proj["id"], agent.id)).fetchall()}
+
+        def key(r):
+            todo = len(calls.get(r["id"], set()) & pending)
+            return (r["abandons"] >= GIVEN_UP, r["name"] in released, todo > 0, todo,
+                    last_id not in calls.get(r["id"], set()), r["n_insns"] or 0, r["rom_offset"] or 0)
+
+        return sorted(cands, key=key)
+
+    def _c64_callee_lines(self, proj, fn) -> list[str]:
+        """What a C64 routine calls or runs into, how, and what's known of each: the comment of a documented one, so it
+        isn't reopened; and what to do when it runs on into the next routine."""
+        rows = self.store.all("SELECT * FROM functions WHERE project_id=?", proj["id"])
+        by = {r["id"]: r for r in rows}
+        hows: dict[int, list[str]] = {}
+        for i, how in self._c64_links(proj, rows).get(fn["id"], []):
+            if how not in hows.setdefault(i, []):
+                hows[i].append(how)
+        out, runs_on = [], None
+        for i in sorted(hows, key=lambda i: by[i]["vram"] or 0):
+            r = by[i]
+            if any(h.startswith("runs on") for h in hows[i]):
+                runs_on = r
+            at = f"- {r['name']} at ${r['vram'] or 0:04X} ({'; '.join(hows[i])})"
+            if r["status"] == "documented":
+                said = next((ln.strip().lstrip(";").strip() for ln in (r["matched_source"] or "").splitlines()
+                             if ln.strip().startswith(";")), "")
+                out.append(f"{at}: documented" + (f": {said[:200]}" if said else ""))
+            elif self.asm_track(r):
+                out.append(f"{at}: not documented yet")
+            else:
+                out.append(f"{at}: set aside ({r['status']})")
+        if runs_on is not None:
+            n = runs_on["name"]
+            out += ["", f"It runs on into {n}. If nothing else calls {n}, the two are one routine cut in two: join them "
+                        f"with merge_function(\"{fn['name']}\") and document the joined routine. If something else "
+                        f"does (merge_function will say so), this is a second way into {n}: document just these bytes "
+                        f"and say that it carries on into {n}."]
+        return out
 
     def compile_and_diff(self, agent: Agent, function: str, source: str, project: str | None = None) -> str:
         """C for the C track; for a hand-written Game Boy routine (the assembly track), its documented assembly."""
@@ -2594,6 +3016,9 @@ class RomNetwork(Network):
         lines += ["", f"Hand-written: no C compiles to it ({why}). Document it instead: {assembler} assembly that "
                       "rebuilds its bytes, with names, comments and constants instead of addresses (guide topic `asm`)."]
         lines += ["", "### The routine as the split has it", "```asm", self._asm_text(fn, proj).strip(), "```"]
+        if c64 and (called := self._c64_callee_lines(proj, fn)):
+            lines += ["", "### What it calls or runs into (use these names and what they do; no need to reopen documented ones)",
+                      *called]
         routine = self._routine(proj, fn)
         inside = [f"- {r[2]} at ${routine.cpu + max(0, r[0] - routine.flat):04X}, {r[1]} bytes" for r in routine.data]
         if inside:
@@ -2649,6 +3074,8 @@ class RomNetwork(Network):
         """Whether a function is the assembly track's: a routine set aside as hand-written code (not data, not padding,
         not one the split couldn't bound)."""
         if fn["status"] != "asm":
+            return False
+        if json.loads(fn["meta"] or "{}").get("review"):  # an agent set it aside for a person: nobody's, until given back
             return False
         why = _set_aside(fn["meta"]).get("why") or ""
         return not any(k in why for k in self.NOT_CODE)
@@ -2811,6 +3238,12 @@ class RomNetwork(Network):
         fn = self._function(function, project)
         if fn["status"] != "asm":
             raise NetworkError(f"{fn['name']} isn't set aside ({fn['status']})")
+        if (kept := json.loads(fn["meta"] or "{}")).get("review_track") == "asm":  # back to the assembly track
+            kept = {k: v for k, v in kept.items() if k not in ("review", "review_by", "review_at", "review_track")}
+            with self.store.tx() as db:
+                db.execute("UPDATE functions SET meta=? WHERE id=?", (json.dumps(kept), fn["id"]))
+                self._event(db, fn["project_id"], None, "reopen", f"{fn['name']}: given back to agents")
+            return {"name": fn["name"], "status": "asm"}
         meta = {k: v for k, v in json.loads(fn["meta"] or "{}").items()
                 if k not in ("asm_code", "asm_twin", "review", "review_by", "review_at")}
         meta |= {"for_agents": True, "given_back_at": time.time()}
@@ -2866,12 +3299,47 @@ class RomNetwork(Network):
             out.append(name)
         return out
 
+    _C64_DEFINE = re.compile(r"^[ \t]*#define[ \t]+([A-Za-z_]\w*)[ \t]+(?:0x|\$)([0-9A-Fa-f]{1,4})\b", re.M)
+
+    def regression_test(self, proj, header, sources=None, only=None, header_for=None):
+        """A C64 project has no C: nothing compiles against its header, and documented routines are judged by their
+        own assembly against the symbol table, so a header edit has nothing to break."""
+        if self.cfg(proj).get("platform") == "c64":
+            return []
+        return super().regression_test(proj, header, sources, only, header_for)
+
+    def _c64_header_names(self, proj) -> str:
+        """A C64 header's `#define wName 0x7322` lines become labels (the symbol table the assembly judge, the
+        listings and read_data use), for names the project doesn't have yet. Says which were added."""
+        header = self._context(proj["id"])["header"]
+        have = {r["name"] for r in self.store.all("SELECT name FROM symbols WHERE project_id=?", proj["id"])}
+        added = []
+        with self.store.tx() as db:
+            for m in self._C64_DEFINE.finditer(header):
+                name, addr = m.group(1), int(m.group(2), 16)
+                if name in have:
+                    continue
+                db.execute("INSERT OR IGNORE INTO symbols(project_id,name,address,size,kind) VALUES(?,?,?,?,?)",
+                           (proj["id"], name, addr, 1, "data"))
+                have.add(name)
+                added.append(f"{name} = ${addr:04X}")
+        if not added:
+            return ""
+        for key in [k for k in self._syms if k == proj["id"] or (isinstance(k, tuple) and k[0] == proj["id"])]:
+            self._syms.pop(key, None)
+        self._xrefs.pop(proj["id"], None)
+        return " New labels: " + ", ".join(added) + "; routines and read_data use them now."
+
     def edit_context(self, agent: Agent, project: str | None, old: str, new: str, message: str,
                      function: str | None = None) -> str:
         self._rom_only(project, "edit_context")
         link = self._link(project)
         if link is None:
-            return super().edit_context(agent, project, old, new, message, function)
+            text = super().edit_context(agent, project, old, new, message, function)
+            proj = self._project(project)
+            if self.cfg(proj).get("platform") == "c64" and "header is now v" in text:
+                text += self._c64_header_names(proj)
+            return text
         text = link.call("/collab/context", agent, old=old, new=new, message=message, function=function)
         if text.startswith("✅"):
             link.sync()
@@ -3237,6 +3705,8 @@ class RomNetwork(Network):
             # the assembly track (Game Boy): hand-written routines documented in assembly, apart from C matches
             "documented": agg["documented"] or 0, "documented_bytes": agg["documented_bytes"] or 0,
             "mapped": self._mapped(proj, cfg) if (proj["arch"] or "") in BANKED_ARCHS else None,
+            # a game with no C at all (the C64): its progress is routines documented out of those to document
+            "asm_only": self._asm_only(proj, cfg),
             "context_version": self._context(proj["id"])["version"],
             "folder": proj["root"],
             "export": cfg.get("export"),
@@ -3245,6 +3715,15 @@ class RomNetwork(Network):
             "mapping": {"version": 1, "regions": list(cfg["mapping"]["regions"])} if cfg.get("mapping") else None,
             "room": self._room_info(proj["slug"]),
         }
+
+    def _asm_only(self, proj, cfg: dict) -> dict | None:
+        """For a project written only in assembly (the C64): the hand-written routines still to document, by count and
+        bytes. What's set aside as not code, or for a person to review, is in neither these nor the documented ones."""
+        if cfg.get("platform") != "c64":
+            return None
+        rows = self.store.all("SELECT status, size, meta FROM functions WHERE project_id=? AND status='asm'", proj["id"])
+        left = [r for r in rows if self.asm_track(r)]
+        return {"to_document": len(left), "to_document_bytes": sum(r["size"] or 0 for r in left)}
 
     def _mapped(self, proj, cfg: dict) -> dict:
         """How much of a banked game's ROM the project knows what it is: code (its functions, but for what's set aside

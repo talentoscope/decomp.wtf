@@ -1,4 +1,5 @@
-"""One function's bytes on the banked lanes (Game Boy, Master System / Game Gear, NES), as the project stores them:
+"""One function's bytes on the banked lanes (Game Boy, Master System / Game Gear, NES, and the C64's one 64 KiB of
+RAM, a single bank), as the project stores them:
 its instructions, its stored listing, the calls and jumps out of it, and its automatic name. What cutting a function
 in two, or joining two, needs to rebuild each piece the way the import made it (rom/gb.py, rom/sms.py, rom/nes.py).
 
@@ -18,7 +19,7 @@ class Lane:
     def __init__(self, arch: str, rom: dict):
         self.arch, self.rom = arch, rom or {}
         self.size = int(self.rom.get("size") or 0) or 1 << 23
-        self.cpu_mod = {"sm83": sm83, "z80": z80, "mos6502": mos6502}[arch]
+        self.cpu_mod = {"sm83": sm83, "z80": z80, "mos6502": mos6502, "6510": mos6502}[arch]
         if arch == "mos6502":
             self.prg_off = int(self.rom.get("prg_offset") or 0)
             self.layout = nes.Layout(nes.layout_of({"mapper": self.rom.get("mapper", 0),
@@ -28,6 +29,8 @@ class Lane:
     # -- where a byte is
 
     def bank(self, flat: int) -> int:
+        if self.arch == "6510":  # one RAM: a function's offset is HEADER + its address (rom/c64.py)
+            return 0
         if self.arch == "sm83":
             return gb.bank_of(flat)
         if self.arch == "z80":
@@ -37,6 +40,9 @@ class Lane:
     def name(self, flat: int, cpu: int | None = None) -> str:
         """The automatic name the import gives a function starting at `flat` (running at `cpu`, where the Master
         System lane found its bank mapped)."""
+        if self.arch == "6510":
+            from . import c64
+            return f"func_{(cpu if cpu is not None else flat - c64.HEADER) & 0xFFFF:04x}"
         if self.arch == "sm83":
             return gb.function_name(flat)
         if self.arch == "z80":
@@ -47,6 +53,9 @@ class Lane:
                 mapping: BusState | None = None) -> int | None:
         """The ROM offset a call or jump to `cpu` reaches from code at `from_flat` (running at `from_cpu`, when
         known): None for RAM, registers, unmapped."""
+        if self.arch == "6510":
+            from . import c64
+            return c64.HEADER + cpu if 0 <= cpu <= 0xFFFF else None
         bank = self.bank(from_flat)
         if self.arch == "sm83":
             return gb.flat_offset(cpu, bank) if cpu < 0x8000 else None
@@ -62,10 +71,16 @@ class Lane:
         return list(self.cpu_mod.disassemble(code, cpu))
 
     def listing(self, code: bytes, cpu: int) -> str:
+        if self.arch == "6510":  # with the C64's chip registers named, as the import lists them
+            from . import c64_hw
+            return c64_hw.name_listing(mos6502.asm_text(code, cpu, width=4))
         return self.cpu_mod.asm_text(code, cpu, width=4)
 
     def refs(self, code: bytes, cpu: int, flat: int) -> list[list[int]]:
         """[offset in the function, 10, CPU address] per call or jump out of it, as the import records them."""
+        if self.arch == "6510":
+            from . import c64
+            return [list(r) for r in c64.refs_of(code, cpu)]
         bank = self.bank(flat)
         if self.arch == "sm83":
             out = gb.refs_of(code, cpu, bank, self.size)
