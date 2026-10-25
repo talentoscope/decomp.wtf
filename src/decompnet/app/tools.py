@@ -64,6 +64,32 @@ Start with project_info, then claim_function -> compile_and_diff (repeat). guide
 Everything runs on the user's computer. The game's code is the user's: never publish it anywhere.
 """
 
+#: the same for a session on the assembly track, where no C is written (every C64 routine, and the hand-written
+#: routines of Game Boy, Master System and NES games)
+ASM_INSTRUCTIONS = """\
+decomp.wtf: you are documenting a game that the user owns: hand-written routines, written out as assembly that
+rebuilds exactly the same bytes, with names, comments and constants. No C is written here. Your routine is
+assembled and compared with the game: accepted means byte-identical, and the routine is saved as documented.
+Start with project_info, then claim_function(track="asm") -> compile_and_diff (repeat). guide(topic) has know-how.
+Everything runs on the user's computer. The game's code is the user's: never publish it anywhere.
+"""
+
+#: tools that only work on C (left out of an assembly session) and tools that only work on some consoles (the
+#: checks their handlers make: the project's platform, or its CPU)
+C_ONLY = {"explain_difference", "probe_compiler"}
+ONLY_ON = {"create_function": ("platform", {"c64"}), "delete_function": ("platform", {"c64"}),
+           "correct_split": ("arch", {"sm83", "z80"})}
+
+
+def tool_fits(name: str, asm: bool = False, platform: str = "", arch: str = "") -> bool:
+    """Whether a tool works in a session: on its track, and on the project's console. An unknown console ("") keeps
+    every tool."""
+    if asm and name in C_ONLY:
+        return False
+    key, values = ONLY_ON.get(name, ("", set()))
+    have = {"platform": platform, "arch": arch}.get(key, "")
+    return not have or have.lower() in values
+
 #: what ASM_PROMPT says differs by console: the assembler, and how names and hardware are written in it
 ASM_WORDS = {
     "gb": {"console": "Game Boy", "assembler": "RGBDS", "define": "DEF wName EQU $C0A2",

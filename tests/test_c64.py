@@ -1086,3 +1086,30 @@ def test_asm_prompt_keeps_api_helpers_going():
     cli = prompt("claude", "c64")
     assert "Repeat for up to 2 routines, then stop" in cli, cli
     assert "correct_split or flag_for_review" in prompt("api", "gb")
+
+
+def test_asm_sessions_get_assembly_tools_that_work_on_their_console():
+    """An assembly session is told about assembly, not C (no GCC, no C source), and every session gets only the
+    tools that work on its project's console; an unknown console keeps every tool, as before."""
+    import json as _json
+    from decompnet.app import tools as _tools
+    from decompnet.app.agents import api_tool_schemas
+
+    def names(**k):
+        return {t["function"]["name"] for t in api_tool_schemas(**k)}
+
+    every = names()
+    assert {"explain_difference", "create_function", "delete_function", "correct_split"} <= every
+    c64 = api_tool_schemas(asm=True, platform="c64", arch="6510")
+    got = {t["function"]["name"] for t in c64}
+    assert {"create_function", "delete_function", "compile_and_diff", "edit_context"} <= got
+    assert not {"explain_difference", "correct_split"} & got
+    text = _json.dumps(c64) + _tools.ASM_INSTRUCTIONS
+    for word in ("GCC", "C source", "Compile C", "into C"):
+        assert word not in text, word
+    assert "Commodore 64" in text
+    gb_c = names(platform="gb", arch="sm83")
+    assert gb_c == every - {"create_function", "delete_function"}
+    gb_asm = api_tool_schemas(asm=True, platform="gb", arch="sm83")
+    assert "correct_split" in {t["function"]["name"] for t in gb_asm} and "Game Boy" in _json.dumps(gb_asm)
+    assert "explain_difference" not in {t["function"]["name"] for t in gb_asm}

@@ -946,6 +946,15 @@ class Manager:
         row = self.net.store.one("SELECT COUNT(*) AS n FROM functions WHERE project_id=? AND status='open'", proj["id"])
         return row["n"]
 
+    def _console(self, slug: str) -> dict:
+        """The project's platform and CPU, which decide the console-only tools a session gets (unknown, as in a room
+        another computer hosts: every tool, and its handler says no)."""
+        try:
+            cfg = self.net.cfg(self.net.project_row(slug))
+        except Exception:
+            return {}
+        return {"platform": str(cfg.get("platform") or ""), "arch": str(cfg.get("arch") or "")}
+
     def _starred_left(self, slug: str, agent_id: int, since: float = 0.0) -> tuple[int, int]:
         """(★ Next in line functions still worth this helper's time: open and not released by it since `since`, how many
         of those it could claim now: nobody else holds them)."""
@@ -1638,11 +1647,13 @@ class Manager:
         if s.options.get("api_key"):
             headers["Authorization"] = f"Bearer {s.options['api_key']}"
         one_at_a_time = is_local(base)  # local models take one function at a time, not a batch
-        schema = api_tool_schemas(fork=bool(self.net.fork_slug(s.slug)), single=one_at_a_time)
+        asm = s.options.get("track") == "asm"
+        schema = api_tool_schemas(fork=bool(self.net.fork_slug(s.slug)), single=one_at_a_time, asm=asm,
+                                  **self._console(s.slug))
         task = self.prompt(s)
         if one_at_a_time:
             task = task.replace("claim_function(count=4)", "claim_function()")
-        messages = [{"role": "system", "content": tools.INSTRUCTIONS},
+        messages = [{"role": "system", "content": tools.ASM_INSTRUCTIONS if asm else tools.INSTRUCTIONS},
                     {"role": "user", "content": task}]
         used_tool = False
         with httpx.Client(timeout=httpx.Timeout(API_TIMEOUT, connect=15)) as client:
@@ -1870,8 +1881,11 @@ def context_window(client, base: str, options: dict) -> int:
     return 128000
 
 
-def api_tool_schemas(fork: bool = False, single: bool = False) -> list[dict]:
-    """OpenAI-style tool definitions for the built-in agent, from the same tools CLI agents get."""
+def api_tool_schemas(fork: bool = False, single: bool = False, asm: bool = False, platform: str = "",
+                     arch: str = "") -> list[dict]:
+    """OpenAI-style tool definitions for the built-in agent, from the same tools CLI agents get: an assembly session
+    (asm) gets no C-only tools and words the rest for assembly, and a project's console (platform, arch) keeps only
+    the tools that work on it."""
     s = lambda **props: {"type": "object", "properties": props, "required": [k for k, v in props.items() if v.pop("req", False)]}
     st = lambda desc, req=False: {"type": "string", "description": desc, "req": req}
     it = lambda desc: {"type": "integer", "description": desc}
@@ -1940,13 +1954,25 @@ def api_tool_schemas(fork: bool = False, single: bool = False) -> list[dict]:
                        s(path=st("file", True), at=st("function name or .text offset", True),
                          new_name=st("new file path (optional)"), data=st("e.g. .rodata:0x88 .data:0x28 (optional)"))),
     }
+    if asm:
+        console = tools.asm_words(platform)["console"] if platform else "Game Boy, Master System, NES, C64"
+        defs["claim_function"] = (defs["claim_function"][0], s(
+            function=st("optional name or address"), strategy=st("finish | easiest | closest | hardest | random"),
+            count=it("up to 6 small routines at once"),
+            track=st(f"asm ({console}): a hand-written routine to document in assembly")))
+        defs["compile_and_diff"] = ("Assemble your routine at its address and compare its bytes with the game's; the "
+                                    "answer lists the checks it still fails. Accepted = documented.",
+                                    s(function=st("routine name", True), source=st("the whole routine in assembly", True)))
+        defs["get_context"] = ("The shared header: the names and constants every routine can use.", s())
+        defs["edit_context"] = ("Replace `old` (exactly once) with `new` in the shared header of names and constants, "
+                                "or append when old is empty.", defs["edit_context"][1])
     if fork:
         defs["compile_and_diff"] = ("Write one complete function definition into its source file, build it and diff "
                                     "with objdiff. 100% / score 0 = matched.",
                                     s(function=st("function name", True), source=st("the function definition", True)))
     names = set(tools.tool_names(fork))
     return [{"type": "function", "function": {"name": n, "description": d, "parameters": p}}
-            for n, (d, p) in defs.items() if n in names]
+            for n, (d, p) in defs.items() if n in names and tools.tool_fits(n, asm, platform, arch)]
 
 
 def _terminate(proc: subprocess.Popen | None = None, client: httpx.Client | None = None) -> None:
