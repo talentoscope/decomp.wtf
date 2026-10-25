@@ -28,7 +28,7 @@ from pathlib import Path
 
 from .. import scoring, seeds, similarity, toolchains
 from ..elfobj import FunctionObj
-from ..network import DISCONNECTED, GIVEN_UP, RELEASE_COOLDOWN, Agent, Network, NetworkError, _ago, _hash_token
+from ..network import DISCONNECTED, GIVEN_UP, RELEASE_COOLDOWN, Agent, Network, NetworkError, _ago, _hash_token, is_ai_agent
 from ..project import compiler_settings
 from ..rom import detect, match, split
 from ..rom.symbols import AUTO_NAME, IDENT, Symbol, SymbolTable
@@ -2877,6 +2877,9 @@ class RomNetwork(Network):
                 fn = self._function(function, proj["slug"])
                 if not self.asm_track(fn):
                     raise NetworkError(f"{fn['name']} isn't a hand-written routine set aside from C ({fn['status']})")
+                if fn["ignored"] and is_ai_agent(agent):  # stuck: left for a person until it's unlocked
+                    raise NetworkError(f"{fn['name']} is marked stuck: it's left for a person until it's unlocked in "
+                                       "decomp.wtf. Claim a different routine.")
                 other = db.execute("SELECT agent_id FROM claims WHERE function_id=?", (fn["id"],)).fetchone()
                 if other is not None:
                     raise NetworkError(f"{fn['name']} is claimed by {self._agent_name(other['agent_id'])}")
@@ -2884,7 +2887,7 @@ class RomNetwork(Network):
                 self._event(db, fn["project_id"], agent.id, "claim", fn["name"])
             else:
                 cands = [row for row in db.execute(
-                        "SELECT f.* FROM functions f WHERE f.project_id=? AND f.status='asm' AND f.id NOT IN "
+                        "SELECT f.* FROM functions f WHERE f.project_id=? AND f.status='asm' AND f.ignored=0 AND f.id NOT IN "
                         "(SELECT function_id FROM claims) ORDER BY f.abandons >= ?, f.name IN (SELECT detail FROM events "
                         "WHERE project_id=? AND agent_id=? AND kind='release'), f.n_insns, f.rom_offset",
                         (proj["id"], GIVEN_UP, proj["id"], agent.id)) if self.asm_track(row)]
@@ -3001,6 +3004,21 @@ class RomNetwork(Network):
             raise NetworkError(why)
         return super().compile_and_diff(agent, function, source, project)
 
+    def _names_used(self, proj, text: str, most: int = 30) -> list[str]:
+        """One line each for the names a listing uses that the project's symbol table describes (hardware registers,
+        ROM calls, names agents gave with a description), in the order they first appear: so the model reading
+        `lda CIA2_ICR` is told what CIA2_ICR is without opening the whole header."""
+        words = list(dict.fromkeys(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", text)))
+        found: dict = {}
+        for i in range(0, len(words), 400):
+            part = words[i:i + 400]
+            for r in self.store.all(f"SELECT name, address, preview FROM symbols WHERE project_id=? AND preview IS NOT "
+                                    f"NULL AND preview != '' AND name IN ({','.join('?' * len(part))})",
+                                    proj["id"], *part):
+                found.setdefault(r["name"], r)
+        return [f"- `{n}` (${found[n]['address']:04X}): {' '.join(found[n]['preview'].split())}"
+                for n in words if n in found][:most]
+
     def _c64_off_track(self, function: str, project: str | None) -> str:
         """Why a Commodore 64 routine that isn't on the assembly track can't be compiled: the track has no C, so
         nothing on it may fall through to the C compiler. Empty for anything else."""
@@ -3062,7 +3080,10 @@ class RomNetwork(Network):
                       "merge_function); if it's data, delete_function; if you can't tell, flag_for_review."]
         lines += ["", f"Hand-written: no C compiles to it ({why}). Document it instead: {assembler} assembly that "
                       "rebuilds its bytes, with names, comments and constants instead of addresses (guide topic `asm`)."]
-        lines += ["", "### The routine as the split has it", "```asm", self._asm_text(fn, proj).strip(), "```"]
+        listing = self._asm_text(fn, proj).strip()
+        lines += ["", "### The routine as the split has it", "```asm", listing, "```"]
+        if named := self._names_used(proj, listing):
+            lines += ["", "### What the names in it are (hardware, ROM calls and the project's names)", *named]
         if c64 and (called := self._c64_callee_lines(proj, fn)):
             lines += ["", "### What it calls or runs into (use these names and what they do; no need to reopen documented ones)",
                       *called]

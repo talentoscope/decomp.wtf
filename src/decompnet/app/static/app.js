@@ -1682,8 +1682,8 @@ function applyAttempts(attempts) {
 function cellColor(f) {
   if (f.status === "matched") return [colors.match, 1];
   if (f.status === "documented") return [colors.doc, 1];
+  if (f.ignored) return [colors.stuck, 1];  // stuck shows on every track, assembly included
   if (f.status === "asm") return f.review ? [colors.work, 0.6] : [colors.tried, 0.35];
-  if (f.ignored) return [colors.stuck, 1];
   if (f.best != null) return [mix(colors.tried, colors.hi, Math.pow(pctOf(f.best, f.insns) || 0, 3)), 1];
   return [colors.open, 1];
 }
@@ -2310,7 +2310,7 @@ function fnBadge(d = S.fnDetail) {
   const st = $("fnStatus");
   st.className = "badge " + (d.status === "matched" ? "matched" : d.status === "documented" ? "documented" : working ? "working" : "");
   st.textContent = d.status === "matched" ? "matched" : d.status === "documented" ? (d.sample ? "documented · look it over" : "documented")
-    : d.status === "asm" ? (d.review ? "needs review" : d.track ? "to document" : "set aside") : working ? `${working.agent} working` : d.ignored ? "ignored: stuck" : d.best != null ? `best ${pctText(pctOf(d.best, d.insns))}` : "not started";
+    : d.ignored ? "ignored: stuck" : d.status === "asm" ? (d.review ? "needs review" : d.track ? "to document" : "set aside") : working ? `${working.agent} working` : d.best != null ? `best ${pctText(pctOf(d.best, d.insns))}` : "not started";
   st.title = d.status === "asm" ? (d.why || "") : d.status === "documented" ? "hand-written: documented in assembly that rebuilds it byte for byte" : "";
 }
 

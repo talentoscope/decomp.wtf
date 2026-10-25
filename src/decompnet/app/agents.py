@@ -730,6 +730,7 @@ class Session:
     # its time (ROUTINE_BUDGET; 0: it holds none), which routine that is, and the model's measured tokens a second
     asking_since: float = 0.0
     routine_until: float = 0.0
+    timed_out: set = field(default_factory=set)  # routines (names) this helper ran out of time on: not taken back
     routine_id: int = 0
     tok_rate: float = 0.0
     log_path: Path | None = None  # the run written out in full, a JSON line per event (Manager._open_log)
@@ -1687,6 +1688,7 @@ class Manager:
         marked stuck (red on the map) until a person unlocks it. What to tell the model."""
         span = _span(routine_budget())
         s.routine_id, s.routine_until = 0, 0.0
+        s.timed_out.add(name)
         before = self.net.store.one("SELECT COUNT(*) AS n FROM notes WHERE function_id=? AND text LIKE ?",
                                     function_id, OUT_OF_TIME + "%")["n"]
         if before:
@@ -1743,7 +1745,7 @@ class Manager:
             task = task.replace("claim_function(count=4)", "claim_function()")
         messages = [{"role": "system", "content": tools.ASM_INSTRUCTIONS if asm else tools.INSTRUCTIONS},
                     {"role": "user", "content": task}]
-        used_tool = server_failed = False
+        used_tool = server_failed = idle_timeout = claimed = False
         with httpx.Client(timeout=httpx.Timeout(API_TIMEOUT, connect=15)) as client:
             s.client = client  # store on session for stop() to close
             window = context_window(client, base, s.options)
@@ -1775,7 +1777,10 @@ class Manager:
                         if s.stop.is_set():
                             return True
                         if held is None:
-                            raise
+                            if idle_timeout:  # twice in a row with nothing held: the server isn't answering
+                                raise
+                            idle_timeout = timed_out = True
+                            break
                         timed_out = True  # its time is up mid-reply: no resend, the routine is put by (_out_of_time)
                         break
                     finally:
@@ -1784,8 +1789,14 @@ class Manager:
                         break
                     budget = int(budget * 0.6)  # the server counts differently, or knows better: trim more
                 if timed_out:
-                    messages.append({"role": "user", "content": self._out_of_time(s, agent, *held)})
+                    if held is None:
+                        s.push("info", f"no reply within {_span(left)} between routines: dropped, told the model to "
+                                       "claim the next one")
+                        messages.append({"role": "user", "content": IDLE_TIMEOUT})
+                    else:
+                        messages.append({"role": "user", "content": self._out_of_time(s, agent, *held)})
                     continue
+                idle_timeout = False
                 if r.status_code != 200:
                     s.log("api_error", status=r.status_code, body=r.text)
                     if (why := no_credit(r.text)) or r.status_code == 402:
@@ -1852,15 +1863,39 @@ class Manager:
                     if one_at_a_time and name == "claim_function":
                         args.pop("count", None)
                     s.push("tool", f"{name}({_args_brief(args)})")
-                    result = tools.call(self.net, agent, s.slug, name, args)
+                    gone = str(args.get("function") or "")
+                    if name in TAKES_A_ROUTINE and gone in s.timed_out:
+                        result = TIMED_OUT_ROUTINE.format(name=gone)  # not run: its 5 minutes are spent
+                    else:
+                        result = tools.call(self.net, agent, s.slug, name, args)
                     s.log("tool_result", name=name, args=args, result=result)
                     messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
+                    if name == "claim_function" and result.startswith("## CLAIMED"):
+                        if claimed:
+                            # each routine gets a fresh conversation: the brief, then this claim. What earlier
+                            # routines taught is in the notes and the project's names, and a short prompt stays fast
+                            messages[:] = messages[:2] + [
+                                {"role": "assistant", "content": "", "tool_calls": [c]},
+                                {"role": "tool", "tool_call_id": c["id"], "content": result}]
+                            s.log("fresh", routine=_claimed_name(result))
+                            break  # any other calls in that reply belonged to the old conversation
+                        claimed = True
                 if used > budget:  # nothing left to trim: the next session starts fresh with the project's notes
                     return True
         return used_tool
 
 
 AGENT_LOGS = 200  # helper runs kept in logs/agents, the newest
+TAKES_A_ROUTINE = ("compile_and_diff", "claim_function")  # tools that would take a routine back
+TIMED_OUT_ROUTINE = ("Not run: your time on {name} is up and it's been put by. Don't go back to it: claim_function() "
+                     "with no function for the next routine.")
+IDLE_TIMEOUT = ("Your last reply took too long and was dropped. Keep replies short: claim_function for the next "
+                "routine.")
+
+
+def _claimed_name(result: str) -> str:
+    m = re.match(r"## CLAIMED[^:]*: \S+?/(\S+)", result)
+    return m.group(1) if m else ""
 
 
 def _safe_name(text: str) -> str:
@@ -1923,13 +1958,17 @@ def measure_rate(s: Session, completion_tokens, seconds: float) -> None:
     s.tok_rate = rate if not s.tok_rate else 0.7 * s.tok_rate + 0.3 * rate
 
 
+REPLY_SHARE = 0.6  # of the time left a reply's cap is sized for: the model slows as the prompt grows, and a prompt
+#                    the server has to read again (not cached) takes time the measured speed doesn't show
+
+
 def reply_cap(s: Session, seconds_left: float) -> int | None:
-    """A reply's max_tokens: what the model writes, at its measured speed, in nine tenths of the time left (a set
+    """A reply's max_tokens: what the model writes, at its measured speed, in REPLY_SHARE of the time left (a set
     max_tokens is the most). None before its speed is known and nothing is set: the request's timeout bounds it."""
     most = int(s.options.get("max_tokens") or 0)
     if not s.tok_rate:
         return most or None
-    cap = max(256, int(s.tok_rate * max(seconds_left, 0) * 0.9))
+    cap = max(256, int(s.tok_rate * max(seconds_left, 0) * REPLY_SHARE))
     return min(cap, most) if most else cap
 API_RESEND_WAIT = 5.0  # seconds before the first resend (then twice, three times that)
 

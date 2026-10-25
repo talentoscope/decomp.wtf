@@ -17,7 +17,7 @@ def test_reply_cap_comes_from_the_measured_speed():
     assert agents.reply_cap(s, 300) is None  # speed not known yet: the timeout bounds the reply
     agents.measure_rate(s, 1400, 100.0)
     assert s.tok_rate == pytest.approx(14.0)
-    assert agents.reply_cap(s, 300) == int(14 * 300 * 0.9)
+    assert agents.reply_cap(s, 300) == int(14 * 300 * agents.REPLY_SHARE)
     assert agents.reply_cap(s, 5) == 256
     agents.measure_rate(s, 2000, 100.0)  # smoothed, not replaced
     assert 14 < s.tok_rate < 20
@@ -265,3 +265,75 @@ def test_old_helper_logs_are_pruned(tmp_path, monkeypatch):
     m._open_log(s)
     s.push("info", "hello")
     assert sorted(f.name for f in folder.glob("*.jsonl")) == sorted(["old-3.jsonl", "old-4.jsonl", s.log_path.name])
+
+
+def _call(name, args, cid="c1"):
+    return {"id": cid, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+
+
+def test_a_routine_whose_time_is_up_is_not_taken_back(tmp_path):
+    net, slug = _project(tmp_path)
+    name = net.store.one("SELECT name FROM functions WHERE status='asm'")["name"]
+    model = _Model([{"tool_calls": [_call("compile_and_diff", {"function": name, "source": "x"})],
+                     "finish_reason": "tool_calls"}, {"content": "ok"}])
+    try:
+        m = agents.Manager(net, tmp_path, "http://127.0.0.1:1/mcp")
+        s, agent = _session(m, net, slug, model.base)
+        s.timed_out.add(name)
+        m._run_api(s, agent)
+        told = model.bodies[1]["messages"][-1]
+        assert told["role"] == "tool" and told["content"] == agents.TIMED_OUT_ROUTINE.format(name=name)
+        assert net.store.one("SELECT 1 FROM claims") is None  # not claimed back
+    finally:
+        model.close()
+
+
+def test_each_routine_after_the_first_gets_a_fresh_conversation(tmp_path):
+    net, slug = _project(tmp_path)
+    claim = {"tool_calls": [_call("claim_function", {"track": "asm"})], "finish_reason": "tool_calls"}
+    model = _Model([{"content": "chat", "tool_calls": [_call("project_info", {}, "c0")], "finish_reason": "tool_calls"},
+                    claim, claim, {"content": "ok"}])
+    try:
+        m = agents.Manager(net, tmp_path, "http://127.0.0.1:1/mcp")
+        s, agent = _session(m, net, slug, model.base)
+        m._run_api(s, agent)
+        assert len(model.bodies[2]["messages"]) == 6  # the first claim keeps what came before
+        sent = model.bodies[3]["messages"]
+        assert len(sent) == 4 and sent[2]["tool_calls"][0]["function"]["name"] == "claim_function"
+        assert sent[3]["role"] == "tool" and sent[3]["content"].startswith("## CLAIMED")
+    finally:
+        model.close()
+
+
+def test_a_timeout_with_no_routine_held_is_not_the_end(tmp_path, monkeypatch):
+    monkeypatch.setattr(agents, "API_TIMEOUT", 1.0)
+    net, slug = _project(tmp_path)
+    model = _Model([3, {"content": "ok"}])
+    try:
+        m = agents.Manager(net, tmp_path, "http://127.0.0.1:1/mcp")
+        s, agent = _session(m, net, slug, model.base)
+        m._run_api(s, agent)
+        assert model.bodies[1]["messages"][-1] == {"role": "user", "content": agents.IDLE_TIMEOUT}
+        assert any("between routines" in f["text"] for f in s.feed)
+    finally:
+        model.close()
+
+
+def test_a_routines_brief_says_what_its_names_are(tmp_path):
+    net, slug = _project(tmp_path)
+    agent, _token = net.local_agent("api-1")
+    brief = net.claim_asm(agent, slug)
+    part = brief.split("### What the names in it are", 1)[1].split("###", 1)[0]
+    assert "`FREKZP` ($00FB):" in part
+
+
+def test_a_stuck_routine_is_not_handed_out_on_the_assembly_track(tmp_path):
+    from decompnet.network import NetworkError
+    net, slug = _project(tmp_path)
+    fn = net.store.one("SELECT * FROM functions WHERE status='asm'")
+    with net.store.tx() as db:
+        db.execute("UPDATE functions SET ignored=1 WHERE id=?", (fn["id"],))
+    agent, _token = net.local_agent("api-1")
+    assert net.claim_asm_row(agent, slug) is None
+    with pytest.raises(NetworkError, match="marked stuck"):
+        net.claim_asm_row(agent, slug, fn["name"])
