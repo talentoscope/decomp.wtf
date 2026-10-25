@@ -1246,3 +1246,11 @@ def test_asm_sessions_get_assembly_tools_that_work_on_their_console():
     gb_asm = api_tool_schemas(asm=True, platform="gb", arch="sm83")
     assert "correct_split" in {t["function"]["name"] for t in gb_asm} and "Game Boy" in _json.dumps(gb_asm)
     assert "explain_difference" not in {t["function"]["name"] for t in gb_asm}
+
+
+def test_asm_jump_to_the_routines_own_label_is_named():
+    r = c64_asm.Routine("f", 0x1000, bytes.fromhex("eaea4c0110"), c64_hw.hardware_names())
+    named = c64_asm.judge(r, "; waits\nfwait:\n  nop\nagain:\n  nop\n  jmp again\n").problems
+    assert not any("as a number" in p for p in named), named
+    bare = c64_asm.judge(r, "; waits\nfwait:\n  nop\n  nop\n  jmp $1001\n").problems
+    assert any("leaves $1001 as a number" in p for p in bare), bare

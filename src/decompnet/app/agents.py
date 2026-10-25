@@ -732,6 +732,8 @@ class Session:
     routine_until: float = 0.0
     routine_id: int = 0
     tok_rate: float = 0.0
+    log_path: Path | None = None  # the run written out in full, a JSON line per event (Manager._open_log)
+    log_lock: threading.Lock = field(default_factory=threading.Lock)
 
     @property
     def tiered(self) -> bool:
@@ -740,6 +742,19 @@ class Session:
     def push(self, kind: str, text: str) -> None:
         self.seq += 1
         self.feed.append({"seq": self.seq, "t": time.time(), "type": kind, "text": text[:4000]})
+        self.log(kind, text=text)
+
+    def log(self, event: str, **data) -> None:
+        """One event of the run, in full, to its log file (none open: nothing). A log that can't be written never
+        stops the helper."""
+        if self.log_path is None:
+            return
+        line = json.dumps({"t": round(time.time(), 3), "type": event} | data, ensure_ascii=False, default=str)
+        try:
+            with self.log_lock, open(self.log_path, "a", encoding="utf-8", newline="\n") as f:
+                f.write(line + "\n")
+        except OSError:
+            pass
 
     def snapshot(self, since: int = 0) -> dict:
         return {"last_output": self.last_output, "wait_until": self.wait_until, "wait_why": self.wait_why,
@@ -990,7 +1005,26 @@ class Manager:
     def budget(self) -> float:
         return 0.0  # set by the server from the settings
 
+    def _open_log(self, s: Session) -> None:
+        """Where this run is written out in full: logs/agents/<project>-<helper>-<when it started>.jsonl, the oldest
+        beyond AGENT_LOGS removed."""
+        folder = self.home / "logs" / "agents"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            when = time.strftime("%Y%m%d-%H%M%S", time.localtime(s.started_at))
+            s.log_path = folder / f"{_safe_name(s.slug)}-{_safe_name(s.id)}-{when}.jsonl"
+            old = sorted(folder.glob("*.jsonl"), key=lambda f: f.stat().st_mtime)
+            for f in old[:max(0, len(old) - AGENT_LOGS + 1)]:
+                f.unlink(missing_ok=True)
+        except OSError:
+            s.log_path = None
+            return
+        s.log("start", project=s.slug, helper=s.id, agent_kind=s.kind, label=s.label,
+              options={k: v for k, v in s.options.items() if "key" not in k.lower() and "token" != k.lower()})
+
     def _run(self, s: Session) -> None:
+        if s.log_path is None:
+            self._open_log(s)
         agent, token = self.net.local_agent(s.agent_name)
         only_starred = bool(s.options.get("only_starred"))
         if only_starred:
@@ -1669,6 +1703,20 @@ class Manager:
         return (f"Time's up on {name}: {span} per routine. It's released to the back of the queue with a note. Don't "
                 "go on with it: claim_function for the next routine.")
 
+    def _server_failed(self, s: Session, agent, held: tuple[int, str] | None) -> str:
+        """The model server failed mid-conversation: the routine held goes back to the queue (no strike towards
+        stuck), and what to tell the model as it starts over."""
+        s.routine_id, s.routine_until = 0, 0.0
+        if held is None:
+            return "The model server failed on the last request, so this conversation starts over. Carry on: claim_function."
+        try:
+            self.net.release(agent, held[1], "The model server failed while this was being worked on; the next try "
+                                             "starts from the best attempt and these notes", s.slug)
+        except NetworkError:
+            pass
+        return (f"The model server failed while you were on {held[1]}, so this conversation starts over and {held[1]} "
+                "is back in the queue. claim_function for the next routine.")
+
     def _note(self, agent, slug: str, text: str, function: str) -> None:
         try:
             self.net.add_note(agent, slug, text, function)
@@ -1695,7 +1743,7 @@ class Manager:
             task = task.replace("claim_function(count=4)", "claim_function()")
         messages = [{"role": "system", "content": tools.ASM_INSTRUCTIONS if asm else tools.INSTRUCTIONS},
                     {"role": "user", "content": task}]
-        used_tool = False
+        used_tool = server_failed = False
         with httpx.Client(timeout=httpx.Timeout(API_TIMEOUT, connect=15)) as client:
             s.client = client  # store on session for stop() to close
             window = context_window(client, base, s.options)
@@ -1712,6 +1760,9 @@ class Manager:
                 body = {"model": model, "messages": messages, "tools": schema, "tool_choice": "auto"}
                 if cap := reply_cap(s, left):
                     body["max_tokens"] = cap
+                s.log("request", step=_step, routine=held[1] if held else None, seconds_left=round(left, 1),
+                      max_tokens=body.get("max_tokens"), rate=round(s.tok_rate, 2), messages=len(messages),
+                      last=messages[-1])
                 timed_out = False
                 for _attempt in range(4):
                     used = fit(messages, budget)
@@ -1719,7 +1770,8 @@ class Manager:
                     try:
                         r = _post(s, client, f"{base}/chat/completions", headers=headers, json=body,
                                   timeout=httpx.Timeout(min(API_TIMEOUT, left), connect=min(15.0, left)))
-                    except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError):
+                    except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as e:
+                        s.log("no_reply", seconds=round(time.time() - asked, 1), why=repr(e))
                         if s.stop.is_set():
                             return True
                         if held is None:
@@ -1735,8 +1787,17 @@ class Manager:
                     messages.append({"role": "user", "content": self._out_of_time(s, agent, *held)})
                     continue
                 if r.status_code != 200:
+                    s.log("api_error", status=r.status_code, body=r.text)
                     if (why := no_credit(r.text)) or r.status_code == 402:
                         raise Fatal(why or no_credit("payment required"))
+                    if r.status_code >= 500 and not _too_long(r) and not server_failed:
+                        # the model server failed on this conversation (a bad tool call it can't read back, a crash):
+                        # once, start the conversation over (the routine, if any, back to the queue); twice in a row, stop
+                        server_failed = True
+                        s.push("info", f"the model server failed ({r.status_code}): {_brief_error(r.text)}; starting "
+                                       "the conversation over")
+                        messages[:] = messages[:2] + [{"role": "user", "content": self._server_failed(s, agent, held)}]
+                        continue
                     s.throttled = r.status_code == 429 or bool(_THROTTLED.search(r.text))
                     s.error = f"API error {r.status_code}: {r.text[:300]}"
                     if _too_long(r):
@@ -1745,8 +1806,11 @@ class Manager:
                                    "Studio: Context Length) and set it in Agents & models")
                     s.push("error", s.error)
                     return False
+                server_failed = False
                 reply = r.json()
                 msg = reply["choices"][0]["message"]
+                s.log("reply", seconds=round(time.time() - asked, 1), finish=reply["choices"][0].get("finish_reason"),
+                      usage=reply.get("usage"), message=msg)
                 usage = reply.get("usage") if isinstance(reply.get("usage"), dict) else {}
                 if usage.get("total_tokens"):
                     self._account(s, {"tokens": usage["total_tokens"]})
@@ -1756,6 +1820,16 @@ class Manager:
                 if msg.get("content"):
                     s.push("text", msg["content"])
                 calls = msg.get("tool_calls") or []
+                if broken := [c for c in calls if not _parses(c)]:
+                    # a tool call cut off (its reply hit its cap) or garbled: not run, and not kept, since the server
+                    # reads every earlier call back and fails on one that isn't JSON
+                    names = ", ".join(sorted({(c.get("function") or {}).get("name") or "?" for c in broken}))
+                    s.push("info", f"a tool call ({names}) came back cut off or not valid JSON: not run; told the model "
+                                   "to send it again, shorter")
+                    if msg.get("content"):
+                        messages.append({"role": "assistant", "content": msg["content"]})
+                    messages.append({"role": "user", "content": BROKEN_CALL.format(names=names)})
+                    continue
                 if not calls and reply["choices"][0].get("finish_reason") == "length":
                     # it thought until its reply cap: its time on the routine is short, so tell it to act, don't wait
                     room = f"its cap ({body['max_tokens']} tokens)" if "max_tokens" in body else "the server's cap"
@@ -1779,10 +1853,18 @@ class Manager:
                         args.pop("count", None)
                     s.push("tool", f"{name}({_args_brief(args)})")
                     result = tools.call(self.net, agent, s.slug, name, args)
+                    s.log("tool_result", name=name, args=args, result=result)
                     messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
                 if used > budget:  # nothing left to trim: the next session starts fresh with the project's notes
                     return True
         return used_tool
+
+
+AGENT_LOGS = 200  # helper runs kept in logs/agents, the newest
+
+
+def _safe_name(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", text or "")[:60] or "_"
 
 
 AGENT_IDLE = 15 * 60  # an agent CLI that says nothing this long is ended (DECOMP_AGENT_IDLE, in seconds, changes it)
@@ -1801,6 +1883,28 @@ API_RESENDS = 0  # a request sent again after a timeout or a dropped connection:
 ROUTINE_BUDGET = 300  # seconds an API helper spends on one routine, every request in all (DECOMP_ROUTINE_BUDGET)
 ROUTINE_SLACK = 10  # seconds: less left than this, and the routine's time is up (no request worth sending)
 OUT_OF_TIME = "Out of time:"  # how the note a routine is released with starts: the second time, it's marked stuck
+BROKEN_CALL = ("Your call to {names} was cut off before its arguments were complete (or they weren't valid JSON), so "
+               "it wasn't run. Send it again, shorter: keep the reasoning out of the arguments.")
+
+
+def _parses(call: dict) -> bool:
+    try:
+        json.loads((call.get("function") or {}).get("arguments") or "{}")
+        return True
+    except ValueError:
+        return False
+
+
+def _brief_error(text: str) -> str:
+    """An error body's message, short."""
+    try:
+        e = json.loads(text).get("error")
+        text = e.get("message", text) if isinstance(e, dict) else str(e or text)
+    except (ValueError, AttributeError):
+        pass
+    return " ".join(text.split())[:160]
+
+
 CAPPED = ("You've used up this reply's room while still thinking, and your time on this routine is short. Stop working "
           "it out: make your next tool call now (compile_and_diff with your best version, or a short read_data), "
           "and think in a few lines.")

@@ -1801,16 +1801,38 @@ function setHtml(box, html) {
   return true;
 }
 
+const minSec = (t) => `${Math.floor(t / 60)}m ${String(Math.floor(Math.max(0, t) % 60)).padStart(2, "0")}s`;  // a clock: 3m 07s
+
+/* The clock on a function being worked on: how long it's been on it, and for an API helper, the time it has left on
+   it and how long the request now out has waited for the model. */
+function fnClock(c) {
+  const now = Date.now() / 1000;
+  const s = (S.sessions || []).find((x) => x.agent === c.agent && ["starting", "working", "waiting"].includes(x.state));
+  return [c.claimed_at ? `${minSec(now - c.claimed_at)} on it` : "",
+    s && s.routine_until > now ? `<b>${minSec(s.routine_until - now)} left</b>` : "",
+    s && s.asking_since ? `waiting for the model ${minSec(now - s.asking_since)}` : ""].filter(Boolean).join(" \u00b7 ");
+}
+
+/* Activity: what each agent is on right now, with its clock (the feed below is what happened). */
+function renderActivityNow(claims) {
+  const box = $("activityNow");
+  if (!box) return;
+  const html = claims.map((c) => `<li data-fn="${esc(c.name)}"><span class="who">${esc(c.agent)}</span> on ${fnLink(c.name)}<span class="clock">${fnClock(c)}</span></li>`).join("");
+  box.hidden = !claims.length;
+  if (setHtml(box, html)) box.querySelectorAll(".fn").forEach((x) => { x.onclick = () => openFn(x.dataset.fn); });
+}
+
 function renderNow(claims) {
   const box = $("now");
   claims = claims.filter((c) => c.agent !== AUTO);
+  renderActivityNow(claims);
   if (!claims.length) { setHtml(box, ""); return; }
   const html = claims.map((c) => {
     const sc = S.scores.get(c.name) || [];
     const p = pctOf(c.best_score, c.n_insns);
     const [sym, unit] = c.name.split(/@(.*)/s);  // a fork's symbol@file: the symbol first, the file after it
     return `<div class="job" data-fn="${esc(c.name)}"><div class="job-top"><span class="job-name" title="${esc(c.name)}">${esc(sym)}${unit ? `<small>@${esc(unit)}</small>` : ""}</span><span class="job-who" title="${esc(c.agent)}">${esc(c.agent)}</span></div>
-      ${spark(sc)}<div class="job-foot"><span>${c.n_insns} insns · ${c.attempts} tries</span><b>${p == null ? reading(c) : pctText(p)}</b></div></div>`;
+      ${spark(sc)}<div class="job-foot"><span>${c.n_insns} insns · ${c.attempts} tries</span><b>${p == null ? reading(c) : pctText(p)}</b></div>${(clock => clock ? `<div class="job-clock">${clock}</div>` : "")(fnClock(c))}</div>`;
   }).join("");
   if (!setHtml(box, html)) return;
   box.querySelectorAll(".job").forEach((j) => { j.onclick = () => openFn(j.dataset.fn); });
@@ -1825,7 +1847,6 @@ function renderSessions(sessions) {
   const running = sessions.filter((s) => ["starting", "working", "waiting"].includes(s.state));
   $("stopAll").hidden = running.length < 2;
   $("removeAll").hidden = sessions.length - running.length < 2;
-  const minSec = (t) => `${Math.floor(t / 60)}m ${String(Math.floor(t % 60)).padStart(2, "0")}s`;  // an API helper's wait, its time left
   const html = sessions.map((s) => {
     const claim = S.claims.find((c) => c.agent === s.agent);
     const dot = s.state === "error" ? "err" : s.state === "working" ? "on" : s.state === "stopped" ? "" : "work";

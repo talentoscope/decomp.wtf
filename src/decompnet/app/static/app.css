@@ -343,6 +343,11 @@ a.ghost, a.primary { text-decoration: none; }
 .job svg { width: 100%; height: 34px; display: block; }
 .job-foot { display: flex; justify-content: space-between; font: 11.5px/1 var(--mono); color: var(--muted); }
 .job-foot b { color: var(--work); font-weight: 500; }
+.job-clock { font: 11.5px/1.3 var(--mono); color: var(--muted); }
+.job-clock b, .now-list .clock b { color: var(--work); font-weight: 500; }
+.now-list { list-style: none; margin: 0; padding: 4px 16px 10px; display: grid; gap: 4px; border-bottom: 1px solid var(--line-soft); }
+.now-list li { font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.now-list .clock { margin-left: auto; font: 11.5px/1.3 var(--mono); color: var(--muted); }
 .mini-list { display: grid; padding: 6px 0; }
 .mini-list li { display: flex; align-items: center; gap: 9px; padding: 7px 16px; font-size: 13.5px; min-width: 0; }
 .mini-list li + li { border-top: 1px solid var(--line-soft); }

@@ -461,8 +461,8 @@ def _operand_checks(r: Routine, rows, got: bytes, shifted: bytes, hw_shifted: by
             continue
         if role == "cjump" and r.cpu <= target < r.cpu + len(r.code):
             continue
-        if role == "mem" and r.cpu <= target < r.cpu + len(r.code) and _named(text):
-            continue  # its own bytes by a label (`sta patch+1`: self-modifying code): a label doesn't move
+        if role in ("mem", "jump", "call") and r.cpu <= target < r.cpu + len(r.code) and _named(text):
+            continue  # inside the routine by a label (`jmp loop`, `sta patch+1`): its own labels don't move here
         hw = c64_hw.name_of(target) or (c64_hw.name_of(target, call=True) if role in ("call", "jump") else None)
         if role in ("call", "jump") and not c64_hw.name_of(target) and (
                 target in r.own or any(lo <= target < hi for lo, hi in _switched_out(r.cpu))):
