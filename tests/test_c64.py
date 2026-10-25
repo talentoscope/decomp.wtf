@@ -830,6 +830,35 @@ def test_c64_progress_counts_documented_routines(tmp_path):
     assert net.overview(slug)["asm_only"]["to_document"] == before - 2
 
 
+def test_c64_sidebar_and_pace_count_documented_routines(tmp_path):
+    """The project list (left panel) carries documented progress, and pace counts a documented routine."""
+    from decompnet.app.engine import RomNetwork
+
+    code = bytes([0x20, 0x14, 0x08, 0xAD, 0x18, 0x08, 0x60, 0x8D, 0x18, 0x08, 0x60, 0x00, 0xC6, 0x71])
+    path = tmp_path / "demo.prg"
+    path.write_bytes(_prg(0x0801, _basic(0x0801, 0x080D, code)))
+    net = RomNetwork(tmp_path / "app.db", tmp_path / "work")
+    slug = net.import_rom(path, confirmed=True, log=lambda *_: None)
+    proj = net.project_row(slug)
+    agent, _ = net.local_agent("maxi")
+    with net.store.tx() as db:
+        db.execute(
+            "UPDATE functions SET status='documented', matched_agent_id=?, matched_at=? "
+            "WHERE project_id=? AND name='func_0814'",
+            (agent.id, __import__("time").time(), proj["id"]))
+    ov = net.overview(slug)
+    assert ov["documented"] == 1 and ov["asm_only"] and ov["documented_bytes"] > 0
+    # what /api/projects sends (same fields the sidebar's progress() needs)
+    row = {k: ov.get(k) for k in ("slug", "title", "kind", "origin", "platform", "platform_name", "ready",
+                                    "functions", "matched", "bytes", "matched_bytes", "asm", "asm_bytes",
+                                    "documented", "documented_bytes", "asm_only", "last_activity")}
+    assert row["documented"] == 1 and row["asm_only"]["to_document"] >= 1
+    st = net.stats(slug)
+    assert sum(st["matches_per_hour"]) >= 1
+    me = next(a for a in st["agents"] if a["agent"] == "maxi")
+    assert me["documented"] == 1
+
+
 def test_c64_header_edits_work_and_name_addresses(tmp_path):
     """edit_context on the C64: no C compiler to run, and a #define with an address becomes a label."""
     from decompnet.app.engine import RomNetwork

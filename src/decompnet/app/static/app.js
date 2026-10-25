@@ -749,9 +749,9 @@ async function poll(first) {
       S.e = Math.max(S.e, ev.id);
       if (["match", "split", "merge", "create", "delete", "rename", "reopen", "review", "documented", "reviewed"].includes(ev.kind)) mapDirty = true;
       if (!fresh(ev)) continue;
-      if (ev.kind === "match") {
-        S.flash.set(ev.detail, performance.now());
-        if (ev.agent !== AUTO && ev.agent !== "@" + AUTO) matches.push(ev);
+      if (ev.kind === "match" || ev.kind === "documented") {
+        S.flash.set(ev.detail, { t: performance.now(), kind: ev.kind });
+        if (ev.kind === "match" && ev.agent !== AUTO && ev.agent !== "@" + AUTO) matches.push(ev);
       }
       if (ev.kind === "autopilot") toast(`Autopilot: ${esc(ev.detail)}`, "match");
       if (ev.kind === "link") toast(`🔗 <code>${esc(ev.detail)}</code>&nbsp;is linked into the game`, "match");
@@ -979,18 +979,22 @@ function renderOverview() {
   $("legendAsm").hidden = !c.asm;
   $("legendDoc").hidden = !c.documented;
   setWidths($("fnStack"));
-  const togo = Math.max(0, S.ov.functions - S.ov.matched - c.asm - c.documented);  // what's set aside isn't to go
+  const asmOnly = !!S.ov.asm_only;
+  const togo = asmOnly
+    ? Math.max(0, (S.ov.asm_only.to_document || 0))
+    : Math.max(0, S.ov.functions - S.ov.matched - c.asm - c.documented);  // what's set aside isn't to go
   const todoc = S.ov.mapped ? S.ov.mapped.to_document : 0;
   $("fnSub").textContent = `${togo.toLocaleString()} to go${c.tried ? ` · ${c.tried.toLocaleString()} tried` : ""}${c.working ? ` · ${c.working} in progress` : ""}${c.documented ? ` · ${c.documented.toLocaleString()} documented` : ""}${c.asm ? ` · ${c.asm.toLocaleString()} set aside (assembly or data)${todoc ? `, ${todoc.toLocaleString()} of them to document` : ""}` : ""}`;
   const st = S.stats;
   if (st) {
     const ph = st.matches_per_hour, max = Math.max(1, ...ph);
     const last3 = ph.slice(-3).reduce((a, b) => a + b, 0) / 3;
+    const doneWord = asmOnly ? "documented" : (c.documented ? "matched or documented" : "matched");
     $("paceNum").textContent = `${ph[23]}`;
-    $("paceBars").innerHTML = ph.map((n, i) => `<rect x="${i * 10 + 1}" y="${28 - Math.max(n ? 3 : 1, (26 * n) / max)}" width="8" height="${Math.max(n ? 3 : 1, (26 * n) / max)}" rx="1.5" class="${n ? "on" : ""}"><title>${n} matched ${23 - i ? `${23 - i} h ago` : "this hour"}</title></rect>`).join("");
-    $("paceSub").textContent = `matched in the last hour · ${plural(st.compiles_last_hour, "compile")}` + (last3 > 0 && togo > 0 ? ` · ≈ ${duration(togo / last3)} to go at this pace` : "");
+    $("paceBars").innerHTML = ph.map((n, i) => `<rect x="${i * 10 + 1}" y="${28 - Math.max(n ? 3 : 1, (26 * n) / max)}" width="8" height="${Math.max(n ? 3 : 1, (26 * n) / max)}" rx="1.5" class="${n ? "on" : ""}"><title>${n} ${doneWord} ${23 - i ? `${23 - i} h ago` : "this hour"}</title></rect>`).join("");
+    $("paceSub").textContent = `${doneWord} in the last hour · ${plural(st.compiles_last_hour, "compile")}` + (last3 > 0 && togo > 0 ? ` · ~ ${duration(togo / last3)} to go at this pace` : "");
     $("board").innerHTML = st.agents.length ? st.agents.slice(0, 8).map((r) => `<li><span class="who">${esc(r.agent)}</span><span class="grow"></span>
-        <span class="mono small">${r.matched ? `<b class="ok">${r.matched.toLocaleString()}</b> matched · ` : ""}${r.points ? `<span title="percentage points its attempts made functions closer by">${r.points.toLocaleString()} pts</span> · ` : ""}${plural(r.compiles, "compile")}</span></li>`).join("")
+        <span class="mono small">${r.matched ? `<b class="ok">${r.matched.toLocaleString()}</b> matched · ` : ""}${r.documented ? `<b class="ok">${r.documented.toLocaleString()}</b> documented · ` : ""}${r.points ? `<span title="percentage points its attempts made functions closer by">${r.points.toLocaleString()} pts</span> · ` : ""}${plural(r.compiles, "compile")}</span></li>`).join("")
       : `<li class="muted small">Nobody yet. Matches by agents, the autopilot and you show up here.</li>`;
     renderCloser(st);
     renderSetups(st);
@@ -1719,11 +1723,12 @@ function drawMap() {
     ctx.beginPath(); ctx.roundRect(x, y, size, size, r); ctx.fill();
   }
   for (const [name, fl] of S.flash) {
-    const i = S.byName && S.byName.get(name), t = (now - fl) / 1600;
+    const started = typeof fl === "number" ? fl : fl.t, kind = typeof fl === "number" ? "match" : fl.kind;
+    const i = S.byName && S.byName.get(name), t = (now - started) / 1600;
     if (i == null || t >= 1) { S.flash.delete(name); continue; }
     live = true;
     const [x, y] = at(i), g = size * (0.6 + 1.8 * t);
-    ctx.strokeStyle = rgb(colors.match, 1 - t);
+    ctx.strokeStyle = rgb(kind === "documented" ? colors.doc : colors.match, 1 - t);
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.roundRect(x - g / 2, y - g / 2, size + g, size + g, r + 2); ctx.stroke();
   }
@@ -2145,6 +2150,7 @@ function groupHtml(g) {
   const who = `<span class="who">${esc(g.agent || "")}</span>`;
   const p = pctOf(g.best, g.insns);
   if (g.matched) return `<span class="ok">✓</span> ${who} matched ${fnLink(g.fn)}${g.tries ? ` <span class="score">after ${plural(g.tries, "compile")}</span>` : ""}`;
+  if (g.documented) return `<span class="ok">✓</span> ${who} documented ${fnLink(g.fn)} in assembly${g.tries ? ` <span class="score">after ${plural(g.tries, "compile")}</span>` : ""}`;
   if (g.released) return `${who} set ${fnLink(g.fn)} aside, with notes for the next agent${g.tries ? ` <span class="score">${plural(g.tries, "compile")}${p != null ? ` · best ${pctText(p)}` : ""}</span>` : ""}`;
   if (!g.tries) return `${who} started ${fnLink(g.fn)}`;
   const last = g.lastScore === undefined ? "" : g.lastScore === null ? ` · <span class="bad">last one didn't compile</span>` : "";
@@ -2170,7 +2176,7 @@ function touchGroup(agent, fn, t, change, first) {
     if (g.li !== $("activity").firstElementChild) $("activity").prepend(g.li);
     if (!first) { g.li.classList.remove("fresh"); void g.li.offsetWidth; g.li.classList.add("fresh"); }
   } else g.li = addLine(t, groupHtml(g), first);
-  if (g.matched || g.released) groups.delete(key);
+  if (g.matched || g.documented || g.released) groups.delete(key);
 }
 
 const AUTO = "autopilot";
@@ -2200,6 +2206,7 @@ function addActivity(events, attempts, first) {
       }, first);
     } else if (it.ev.kind === "claim") touchGroup(it.ev.agent, it.ev.detail, it.t, () => {}, first);
     else if (it.ev.kind === "match") touchGroup(it.ev.agent, it.ev.detail, it.t, (g) => { g.matched = true; }, first);
+    else if (it.ev.kind === "documented") touchGroup(it.ev.agent, it.ev.detail, it.t, (g) => { g.documented = true; }, first);
     else if (it.ev.kind === "release") touchGroup(it.ev.agent, it.ev.detail, it.t, (g) => { g.released = true; }, first);
     else addLine(it.t, eventHtml(it.ev), first);
   }

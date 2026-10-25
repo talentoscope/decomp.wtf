@@ -3276,8 +3276,14 @@ class RomNetwork(Network):
         name = fn["name"]
         if verdict.label and verdict.label != name:
             try:
-                if self.rename_symbol(agent, proj["slug"], name, verdict.label, "documented").startswith("✅"):
+                text = self.rename_symbol(agent, proj["slug"], name, verdict.label, "documented")
+                if text.startswith("✅"):
                     name = verdict.label
+                    # the documented event was written under the old name: the map flash and activity need the final one
+                    with self.store.tx() as db:
+                        db.execute("UPDATE events SET detail=? WHERE id=(SELECT id FROM events WHERE project_id=? AND "
+                                   "kind='documented' AND detail=? ORDER BY id DESC LIMIT 1)",
+                                   (name, proj["id"], fn["name"]))
             except NetworkError:
                 pass
         for cache in (self._syms, self._xrefs):
@@ -4233,11 +4239,21 @@ class RomNetwork(Network):
         board += [{"agent": a, "compiles": 0, "matched": n, "last": None} for a, n in matched.items()]
         board.sort(key=lambda r: (-r["matched"], -r["compiles"]))
         per_hour = [0] * 24
-        for r in self.store.all("SELECT matched_at FROM functions WHERE project_id=? AND status='matched' AND matched_at > ?",
-                                pid, now - 86400):
-            per_hour[23 - min(23, max(0, int((now - r["matched_at"]) // 3600)))] += 1  # (one matched since `now`: this hour)
+        # matches and documented routines both count: each was finished at matched_at
+        for r in self.store.all(
+                "SELECT matched_at FROM functions WHERE project_id=? AND status IN ('matched','documented') "
+                "AND matched_at > ?", pid, now - 86400):
+            per_hour[23 - min(23, max(0, int((now - r["matched_at"]) // 3600)))] += 1  # (one finished since `now`: this hour)
         compiles = self.store.one("SELECT COUNT(*) AS n FROM attempts t JOIN functions f ON f.id=t.function_id "
                                   "WHERE f.project_id=? AND t.created_at > ?", pid, now - 3600)["n"]
+        documented = {r["agent"]: r["n"] for r in self.store.all(
+            "SELECT a.name AS agent, COUNT(*) AS n FROM functions f JOIN agents a ON a.id=f.matched_agent_id "
+            "WHERE f.project_id=? AND f.status='documented' GROUP BY a.id", pid)}
+        for row in board:
+            row["documented"] = documented.pop(row["agent"], 0)
+        board += [{"agent": a, "compiles": 0, "matched": 0, "documented": n, "last": None}
+                  for a, n in documented.items()]
+        board.sort(key=lambda r: (-(r["matched"] + r.get("documented", 0)), -r["compiles"]))
         progress = self._progress(pid, now)
         for row in board:
             row["points"] = round(progress["points"].get(row["agent"], 0.0))
