@@ -1825,13 +1825,14 @@ function renderSessions(sessions) {
   const running = sessions.filter((s) => ["starting", "working", "waiting"].includes(s.state));
   $("stopAll").hidden = running.length < 2;
   $("removeAll").hidden = sessions.length - running.length < 2;
+  const minSec = (t) => `${Math.floor(t / 60)}m ${String(Math.floor(t % 60)).padStart(2, "0")}s`;  // an API helper's wait, its time left
   const html = sessions.map((s) => {
     const claim = S.claims.find((c) => c.agent === s.agent);
     const dot = s.state === "error" ? "err" : s.state === "working" ? "on" : s.state === "stopped" ? "" : "work";
     const live = ["starting", "working", "waiting"].includes(s.state);
     const b = s.compiles != null ? s : board.get(s.agent);  // this session's own work (names are reused)
     const quiet = live && s.last_output ? Math.floor((Date.now() / 1000 - s.last_output) / 60) : 0;  // the watchdog ends it at 15
-    const facts = [s.model ? esc(s.model) : "default model", s.runs ? `session ${s.runs}` : "", quiet >= 3 ? `<b class="warn-text">silent ${quiet} min</b>` : "", b && b.matched ? `<b class="ok">${b.matched} matched</b>` : "", b ? plural(b.compiles, "compile") : "",
+    const facts = [s.model ? esc(s.model) : "default model", s.runs ? `session ${s.runs}` : "", quiet >= 3 ? `<b class="warn-text">silent ${quiet} min</b>` : "", live && s.asking_since ? `waiting for the model ${minSec(Date.now() / 1000 - s.asking_since)}` : "", live && s.routine_until > Date.now() / 1000 ? `${minSec(s.routine_until - Date.now() / 1000)} left on this routine` : "", b && b.matched ? `<b class="ok">${b.matched} matched</b>` : "", b ? plural(b.compiles, "compile") : "",
       s.usd ? money(s.usd) : s.tokens ? `${(s.tokens / 1000).toFixed(0)}k tokens` : "", s.started_at ? `since ${clock(s.started_at).slice(0, 5)}` : ""].filter(Boolean);
     return `<div class="session"><div class="session-top"><span class="dot ${dot}"></span><b>${esc(s.label)}</b>${s.only_starred ? `<span class="tag">only ★</span>` : ""}${s.pin ? `<span class="tag" title="${s.lean ? `the lean loop: ${esc(LEAN_NAME[s.lean] || s.lean)}` : "pinned to one function"}">on ${esc(s.pin)}${s.lean ? " · lean" : ""}</span>` : s.lean ? `<span class="tag" title="the lean loop: ${esc(LEAN_NAME[s.lean] || s.lean)}, function after function">lean</span>` : ""}${s.focus ? `<span class="tag">${esc((FOCUS.find((f) => f.id === s.focus) || {}).name || s.focus)}</span>` : ""}${s.track === "asm" ? `<span class="tag" title="documenting hand-written routines in assembly">assembly</span>` : ""}
         <span class="state ${s.state === "error" ? "err" : ""}">${esc(STATE_TEXT[s.state] || s.state)}</span>

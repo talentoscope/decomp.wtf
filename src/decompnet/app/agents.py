@@ -726,6 +726,12 @@ class Session:
     resume_note: str = ""  # for the next session's prompt: where the one the watchdog ended was
     wait_until: float = 0.0  # waiting for its account: a plan's quota to reset, or the provider's limit of requests
     wait_why: str = ""
+    # API helpers: when the request now waiting on the model went out (0: none), when the routine it holds runs out of
+    # its time (ROUTINE_BUDGET; 0: it holds none), which routine that is, and the model's measured tokens a second
+    asking_since: float = 0.0
+    routine_until: float = 0.0
+    routine_id: int = 0
+    tok_rate: float = 0.0
 
     @property
     def tiered(self) -> bool:
@@ -737,6 +743,7 @@ class Session:
 
     def snapshot(self, since: int = 0) -> dict:
         return {"last_output": self.last_output, "wait_until": self.wait_until, "wait_why": self.wait_why,
+                "asking_since": self.asking_since, "routine_until": self.routine_until,
                 "id": self.id, "kind": self.kind, "label": self.label, "slug": self.slug, "agent": self.agent_name, "focus": self.options.get("focus") or "",
                 "state": self.state, "runs": self.runs, "error": self.error, "started_at": self.started_at,
                 "model": (self.routed_model if self.tiered else self.options.get("model")) or "",
@@ -1629,6 +1636,39 @@ class Manager:
                         pass
         return self._progress(agent.id) != before or bool(s.pin_done)
 
+    def _routine_clock(self, s: Session, agent) -> tuple[int, str] | None:
+        """The routine an API helper holds, as (id, name), its clock started when it first holds it (ROUTINE_BUDGET from
+        then: s.routine_until). None when it holds none."""
+        row = self.net.store.one("SELECT f.id, f.name FROM claims c JOIN functions f ON f.id=c.function_id "
+                                 "WHERE c.agent_id=? ORDER BY c.function_id LIMIT 1", agent.id)
+        if row is None:
+            s.routine_id, s.routine_until = 0, 0.0
+            return None
+        if row["id"] != s.routine_id:
+            s.routine_id, s.routine_until = row["id"], time.time() + routine_budget()
+        return row["id"], row["name"]
+
+    def _out_of_time(self, s: Session, agent, function_id: int, name: str) -> str:
+        """A routine whose time is up: the first time it goes to the back of the queue with a note; the second, it's
+        marked stuck (red on the map) until a person unlocks it. What to tell the model."""
+        span = _span(routine_budget())
+        s.routine_id, s.routine_until = 0, 0.0
+        before = self.net.store.one("SELECT COUNT(*) AS n FROM notes WHERE function_id=? AND text LIKE ?",
+                                    function_id, OUT_OF_TIME + "%")["n"]
+        if before:
+            self.net.give_up_stuck_function(agent.id)
+            s.push("info", f"out of time on {name} again ({span}): marked it stuck, moving on")
+            return (f"Time's up on {name}: {span} per routine, and it ran out a second time, so it's marked stuck for "
+                    "a person to look at. Leave it and claim_function for the next routine.")
+        try:
+            self.net.release(agent, name, f"{OUT_OF_TIME} {span} on it without documenting it; the next try starts "
+                                          "from the best attempt and these notes", s.slug)
+        except NetworkError:
+            pass
+        s.push("info", f"out of time on {name} ({span}): back to the queue, moving on")
+        return (f"Time's up on {name}: {span} per routine. It's released to the back of the queue with a note. Don't "
+                "go on with it: claim_function for the next routine.")
+
     def _note(self, agent, slug: str, text: str, function: str) -> None:
         try:
             self.net.add_note(agent, slug, text, function)
@@ -1664,21 +1704,36 @@ class Manager:
             for _step in itertools.count() if not s.options.get("max_steps") else range(int(s.options["max_steps"])):
                 if s.stop.is_set():
                     return True
+                held = self._routine_clock(s, agent)
+                if held is not None and time.time() >= s.routine_until - ROUTINE_SLACK:
+                    messages.append({"role": "user", "content": self._out_of_time(s, agent, *held)})
+                    continue
+                left = s.routine_until - time.time() if held is not None else API_TIMEOUT
+                body = {"model": model, "messages": messages, "tools": schema, "tool_choice": "auto"}
+                if cap := reply_cap(s, left):
+                    body["max_tokens"] = cap
+                timed_out = False
                 for _attempt in range(4):
                     used = fit(messages, budget)
+                    s.asking_since = asked = time.time()
                     try:
-                        r = _post(s, client, f"{base}/chat/completions", headers=headers,
-                                  json={"model": model, "messages": messages, "tools": schema, "tool_choice": "auto"})
+                        r = _post(s, client, f"{base}/chat/completions", headers=headers, json=body,
+                                  timeout=httpx.Timeout(min(API_TIMEOUT, left), connect=min(15.0, left)))
                     except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError):
-                        # _post gives up after API_RESENDS timeouts: don't keep hammering this function, give it up so it
-                        # goes red on the map and out of the scheduler, then let this run end and start fresh on the next one
-                        name = self.net.give_up_stuck_function(s.agent_id)
-                        if name:
-                            s.push("info", f"moving on: {name} kept timing out - marked it stuck, claiming the next")
-                        raise
+                        if s.stop.is_set():
+                            return True
+                        if held is None:
+                            raise
+                        timed_out = True  # its time is up mid-reply: no resend, the routine is put by (_out_of_time)
+                        break
+                    finally:
+                        s.asking_since = 0.0
                     if r.status_code == 200 or not _too_long(r):
                         break
                     budget = int(budget * 0.6)  # the server counts differently, or knows better: trim more
+                if timed_out:
+                    messages.append({"role": "user", "content": self._out_of_time(s, agent, *held)})
+                    continue
                 if r.status_code != 200:
                     if (why := no_credit(r.text)) or r.status_code == 402:
                         raise Fatal(why or no_credit("payment required"))
@@ -1695,11 +1750,21 @@ class Manager:
                 usage = reply.get("usage") if isinstance(reply.get("usage"), dict) else {}
                 if usage.get("total_tokens"):
                     self._account(s, {"tokens": usage["total_tokens"]})
+                measure_rate(s, usage.get("completion_tokens"), time.time() - asked)
                 if msg.get("reasoning_content"):
                     s.push("think", msg["reasoning_content"][:2000])
                 if msg.get("content"):
                     s.push("text", msg["content"])
                 calls = msg.get("tool_calls") or []
+                if not calls and reply["choices"][0].get("finish_reason") == "length":
+                    # it thought until its reply cap: its time on the routine is short, so tell it to act, don't wait
+                    room = f"its cap ({body['max_tokens']} tokens)" if "max_tokens" in body else "the server's cap"
+                    s.push("info", f"the reply hit {room} while the model was still thinking: told it to make its "
+                                   "next move")
+                    if msg.get("content"):
+                        messages.append({"role": "assistant", "content": msg["content"]})
+                    messages.append({"role": "user", "content": CAPPED})
+                    continue
                 messages.append({k: v for k, v in msg.items() if k in ("role", "content", "tool_calls")} | {"role": "assistant"})
                 if not calls:
                     return used_tool
@@ -1731,9 +1796,62 @@ def _span(seconds: float) -> str:
     return f"{int(seconds // 60)} minutes" if seconds >= 120 else f"{int(seconds)} seconds"
 
 
-API_TIMEOUT = float(os.environ.get("DECOMP_API_TIMEOUT") or 600)  # seconds one reply may take (a slow box, a long think)
-API_RESENDS = 3  # a request sent again after a timeout or a dropped connection, before the run counts as failed
+API_TIMEOUT = float(os.environ.get("DECOMP_API_TIMEOUT") or 300)  # seconds one reply may take (a slow box, a long think)
+API_RESENDS = 0  # a request sent again after a timeout or a dropped connection: never (it gets stuck the same way)
+ROUTINE_BUDGET = 300  # seconds an API helper spends on one routine, every request in all (DECOMP_ROUTINE_BUDGET)
+ROUTINE_SLACK = 10  # seconds: less left than this, and the routine's time is up (no request worth sending)
+OUT_OF_TIME = "Out of time:"  # how the note a routine is released with starts: the second time, it's marked stuck
+CAPPED = ("You've used up this reply's room while still thinking, and your time on this routine is short. Stop working "
+          "it out: make your next tool call now (compile_and_diff with your best version, or a short read_data), "
+          "and think in a few lines.")
+
+
+def routine_budget() -> float:
+    return float(os.environ.get("DECOMP_ROUTINE_BUDGET") or ROUTINE_BUDGET)
+
+
+def measure_rate(s: Session, completion_tokens, seconds: float) -> None:
+    """The model's speed in tokens a second, from a reply: what it wrote over how long the request took (reading the
+    prompt included, so it errs slow). Smoothed over replies."""
+    if not completion_tokens or seconds < 1:
+        return
+    rate = float(completion_tokens) / seconds
+    s.tok_rate = rate if not s.tok_rate else 0.7 * s.tok_rate + 0.3 * rate
+
+
+def reply_cap(s: Session, seconds_left: float) -> int | None:
+    """A reply's max_tokens: what the model writes, at its measured speed, in nine tenths of the time left (a set
+    max_tokens is the most). None before its speed is known and nothing is set: the request's timeout bounds it."""
+    most = int(s.options.get("max_tokens") or 0)
+    if not s.tok_rate:
+        return most or None
+    cap = max(256, int(s.tok_rate * max(seconds_left, 0) * 0.9))
+    return min(cap, most) if most else cap
 API_RESEND_WAIT = 5.0  # seconds before the first resend (then twice, three times that)
+
+
+def _until_stopped(s: Session, call):
+    """``call()``, given up when the helper is stopped: Stop ends a request waiting on the model at once (closing the
+    client doesn't interrupt a reply being waited for). The request itself ends on its own timeout."""
+    box: dict = {}
+
+    def run():
+        try:
+            box["r"] = call()
+        except BaseException as e:  # handed to the caller's thread
+            box["e"] = e
+
+    t = threading.Thread(target=run, daemon=True, name="model-request")
+    t.start()
+    while True:
+        t.join(0.2)
+        if not t.is_alive():
+            break
+        if s.stop.is_set():
+            raise httpx.ReadError("the helper was stopped")
+    if "e" in box:
+        raise box["e"]
+    return box["r"]
 
 
 def _post(s: Session, client, url: str, **kw):
@@ -1741,7 +1859,7 @@ def _post(s: Session, client, url: str, **kw):
     times: a slow model or a flaky box on the network isn't a failed session."""
     for attempt in range(API_RESENDS + 1):
         try:
-            return client.post(url, **kw)
+            return _until_stopped(s, lambda: client.post(url, **kw))
         except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as e:
             if attempt == API_RESENDS or s.stop.is_set():
                 raise

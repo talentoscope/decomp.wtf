@@ -1428,8 +1428,8 @@ class RomNetwork(Network):
             fn = db.execute("SELECT f.id, f.name FROM functions f WHERE f.id=?", (hold["function_id"],)).fetchone()
             if fn is None:
                 return None
-            db.execute("UPDATE functions SET ignored=1 WHERE id=?", (fn["id"]))
-            db.execute("DELETE FROM claims WHERE function_id=?", (fn["id"]))
+            db.execute("UPDATE functions SET ignored=1 WHERE id=?", (fn["id"],))
+            db.execute("DELETE FROM claims WHERE function_id=?", (fn["id"],))
         return fn["name"]
 
     def list_functions(self, project: str | None, status: str = "open", limit: int = 40) -> str:
