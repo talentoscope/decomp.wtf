@@ -343,8 +343,10 @@ def describe(addr: int) -> str | None:
     return rom[2] if rom else None
 
 
-def name_listing(text: str) -> str:
-    """Rewrite ``$`` operands to names. Immediates (``#$01``) stay numbers. Already-named text is unchanged."""
+def name_listing(text: str, own: dict[int, str] | None = None) -> str:
+    """Rewrite ``$`` operands to names. Immediates (``#$01``) stay numbers. Already-named text is unchanged.
+    ``own`` is the project's routines by address: a jsr/jmp there names the program's routine, not the ROM's."""
+    own = own or {}
 
     out = []
     for line in text.splitlines():
@@ -352,7 +354,8 @@ def name_listing(text: str) -> str:
         call = bool(re.search(r"\b(jsr|jmp)\b", code))
 
         def repl(m: re.Match, call: bool = call) -> str:
-            name = name_of(int(m.group(1), 16), call=call)
+            addr = int(m.group(1), 16)
+            name = (own.get(addr) if call and not name_of(addr) else None) or name_of(addr, call=call)
             return name if name else m.group(0)
 
         saved: list[str] = []

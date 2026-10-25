@@ -345,6 +345,8 @@ def call(net: RomNetwork, agent: Agent, slug: str, name: str, args: dict) -> str
         return f"error: {e}"
     except TypeError as e:
         return f"error: bad arguments for {name}: {e}"
+    except Exception as e:  # anything else is the tool failing, not the session: the model hears it and goes on
+        return f"error: {name} failed ({type(e).__name__}: {e})"
 
 
 # Antigravity CLI otherwise finds MCP tools on demand (an extra step each, through its generic dispatcher):
@@ -365,6 +367,10 @@ def build_mcp(net: RomNetwork, agent_of: Callable[[Context], tuple[Agent, str]])
             return await anyio.to_thread.run_sync(lambda: HANDLERS[name](net, agent, slug, **_named(net, agent, slug, args)))
         except NetworkError as e:
             raise ToolError(str(e)) from None
+        except ToolError:
+            raise
+        except Exception as e:  # the tool failed: say so to the agent rather than drop the call
+            raise ToolError(f"{name} failed ({type(e).__name__}: {e})") from None
 
     @mcp.tool(meta=ALWAYS_LOAD)
     async def project_info(ctx: Context) -> str:

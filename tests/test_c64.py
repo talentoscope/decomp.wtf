@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from decompnet.rom import c64, c64_asm, c64_basic, c64_hw, detect
+from decompnet.rom import c64_find, c64, c64_asm, c64_basic, c64_hw, detect
 from decompnet.rom.n64 import RomError
 
 SAMPLE_T64 = Path("/tmp/c64media/MICROCOS.T64")
@@ -246,6 +246,127 @@ def test_asm_judge_accepts_names_and_rejects_a_bare_address():
     text = "; skips the second load\nspin:\n  lda #$01\n  bne done\n  lda #$02\ndone:\n  rts\n"
     forward = c64_asm.judge(c64_asm.Routine("func_c000", 0xC000, branched, {}), text)
     assert forward.ok, forward.problems
+
+
+def test_asm_judge_zero_page_names_take_the_snapshots_form():
+    # the program addresses $001E absolutely (BD 1E 00) and $46 as zero page (85 46)
+    code = c64.assemble("lda $001E,x\nsta $46\nrts\n", 0x747D)
+    assert code[:3] == b"\xbd\x1e\x00"
+    routine = c64_asm.Routine("func_747d", 0x747D, code, {"wSrcBuf": 0x1E, "wInitBuf": 0x46})
+    named = "; copies one source byte to the init buffer\ncopy_src:\n  lda wSrcBuf,x\n  sta wInitBuf\n  rts\n"
+    verdict = c64_asm.judge(routine, named)
+    assert verdict.ok, verdict.problems
+    local = "wMine = $001E\n; copies one source byte to the init buffer\ncopy_src:\n  lda wMine,x\n  sta wInitBuf\n  rts\n"
+    assert c64_asm.judge(routine, local).ok
+    bare = "; copies one source byte to the init buffer\ncopy_src:\n  lda $001E,x\n  sta wInitBuf\n  rts\n"
+    rejected = c64_asm.judge(routine, bare)
+    assert not rejected.ok and any("leaves $001E as a number" in p for p in rejected.problems)
+    short = "; copies one source byte to the init buffer\ncopy_src:\n  lda $1E,x\n  sta wInitBuf\n  rts\n"
+    wrong = c64_asm.judge(routine, short)
+    assert not wrong.ok and any("line 3:" in p and "four digits" in p for p in wrong.problems), wrong.problems
+
+
+def test_asm_judge_takes_name_offsets_for_tables_and_self_modifying_code():
+    # func_e000 from Ping_Pong: copies a handler address from the table at $E00F into its own jmp, then takes it
+    code = c64.assemble("lda $E00F,y\nsta $E00D\nlda $E010,y\nsta $E00E\njmp $E2B7\n", 0xE000)
+    routine = c64_asm.Routine("func_e000", 0xE000, code, {"call_timer": 0xE2B7}, own={0xE2B7: "call_timer"})
+    good = ("; jumps to the handler Y picks from the table at $E00F\ndispatch:\n  lda HANDLERS,y\n  sta patch+1\n"
+            "  lda HANDLERS+1,y\n  sta patch+2\npatch:\n  jmp call_timer\nHANDLERS = $E00F\n")
+    verdict = c64_asm.judge(routine, good)
+    assert verdict.ok, verdict.problems
+    bare = c64_asm.judge(routine, good.replace("HANDLERS+1,y", "$E010,y"))
+    assert not bare.ok and any("leaves $E010 as a number" in p for p in bare.problems), bare.problems
+
+
+def test_c64_code_under_the_rom_keeps_the_programs_names():
+    """A program's routine where the ROM normally is: a jsr to it uses the project's name, not the ROM's."""
+    rom_name = c64_hw.name_of(0xE2B4, call=True)
+    assert rom_name  # (a BASIC routine name lives there)
+    code = c64.assemble("jsr $E2B4\nrts\n", 0xE000)
+    routine = c64_asm.Routine("func_e000", 0xE000, code, {rom_name: 0xE2B4, "tick_timer": 0xE2B4},
+                              own={0xE2B4: "tick_timer", 0xE000: "func_e000"})
+    verdict = c64_asm.judge(routine, "; runs one timer tick\ntick:\n  jsr tick_timer\n  rts\n")
+    assert verdict.ok, verdict.problems
+    assert "jsr tick_timer" in c64_asm.draft(routine)
+    assert c64_hw.name_listing("e000  jsr $E2B4", {0xE2B4: "tick_timer"}) == "e000  jsr tick_timer"
+    assert c64_hw.name_listing("e000  jsr $E2B4") == f"e000  jsr {rom_name}"
+    from decompnet.app.engine import _c64_under_rom
+    assert (_c64_under_rom(0xE000), _c64_under_rom(0xA123), _c64_under_rom(0x1B22)) == ("KERNAL", "BASIC", "")
+
+
+# func_5965 from Ping_Pong and the head the split missed: $5959 saves X/Y, waits for the key to be let go and pressed
+_WAIT_KEY = bytes.fromhex("8a489848" "2042f1d0fb" "2042f1f0fb" "856068a868aaa56060")
+
+
+def test_finder_moves_a_probable_start_back_to_the_head_it_branches_into():
+    ram = bytearray(0x10000)
+    ram[0x5954:0x5959] = bytes.fromhex("a90185fb60")  # the routine before it: lda #$01 / sta $FB / rts
+    ram[0x5959:0x5959 + len(_WAIT_KEY)] = _WAIT_KEY
+    ram[0x3000:0x3004] = bytes.fromhex("65596559")  # $5965 as a word elsewhere: the tail scores, the head doesn't
+    result = c64_find.find(bytes(ram), 0x5954)
+    starts = {f.start: f for f in result.functions}
+    assert 0x5965 not in starts and 0x5959 in starts, sorted(hex(a) for a in starts)
+    head = starts[0x5959]
+    assert any("moved back from $5965" in w for w in head.why) and 0x596F in head.insns
+    end, _islands = c64_find.body(head, set(starts))
+    assert end == 0x5959 + len(_WAIT_KEY)
+
+
+def test_asm_judge_says_where_a_label_has_to_go():
+    tail = _WAIT_KEY[12:]
+    r = c64_asm.Routine("func_5965", 0x5965, tail, {"w_0060": 0x60}, own={0x5965: "func_5965"},
+                        free=[(0x5959, 0x5965)])
+    body = "  sta w_0060\n  pla\n  tay\n  pla\n  tax\n  lda w_0060\n  rts\n"
+    after = c64_asm.judge(r, "; restores X/Y and A\nwait_tail:\n  beq key_down\n" + body + "key_down:\n")
+    said = " ".join(after.problems)
+    assert not after.ok and "define the name instead: `key_down = $5962`" in said, after.problems
+    assert 'create_function(at="$5959")' in said and 'merge_function("func_5965")' in said, after.problems
+    defined = c64_asm.judge(r, "; restores X/Y and A\nwait_tail:\n  beq key_down\n" + body + "key_down = $5962\n")
+    assert defined.ok, defined.problems
+    # func_359d: a label one instruction early
+    code = c64.assemble("ldy $d3\niny\ncpy $d5\nbcs $35ab\nlda $029f,y\nbeq $359f\nsty $d3\njmp $c917\n", 0x359D)
+    r = c64_asm.Routine("func_359d", 0x359D, code, {"handler": 0xC917, "LEVELS": 0x029F, "w_d3": 0xD3, "w_d5": 0xD5})
+    early = c64_asm.judge(r, "; skips blanks\nskip:\n  ldy w_d3\nnext:\n  iny\n  cpy w_d5\n  bcs done\n  lda LEVELS,y\n"
+                             "  beq next\ndone:\n  sty w_d3\n  jmp handler\n")
+    assert any("`done` sits at $35A9; $35AB is line 12 (`jmp handler`): put the label on that line" in p
+               for p in early.problems), early.problems
+
+
+def test_asm_judge_explains_lines_py65_cant_read():
+    code = c64.assemble("clc\nlda $4b\nadc #$03\nsta $4b\nrts\n", 0x31BA)
+    r = c64_asm.Routine("func_31ba", 0x31BA, code, {"w_004b": 0x4B})
+    bare = c64_asm.judge(r, "; adds 3\nadd_3:\n  clc\n  LDA_004B\n  adc #$03\n  sta LDA_004B\n  rts\nLDA_004B = $4B\n")
+    assert bare.problems == ["line 4: `LDA_004B` on its own isn't an instruction: a name goes after one "
+                             "(`lda LDA_004B`), and a label takes a colon (`LDA_004B:`)"], bare.problems
+    dollar = c64_asm.judge(r, "; adds 3\nadd_3:\n  clc\n  lda w_004b\n  adc #$03\n  sta w_004b\n  rts\n$5962_target:\n")
+    assert any("`$5962_target` isn't a name" in p and "`target_5962:`" in p for p in dollar.problems), dollar.problems
+    word = c64_asm.judge(r, "; adds 3\nadd_3:\n  clc\n  load w_004b\n  adc #$03\n  sta w_004b\n  rts\n")
+    assert word.problems == ["line 4: `load` isn't a 6502 instruction"], word.problems
+
+
+def test_c64_brief_points_at_bytes_no_routine_holds(tmp_path):
+    from decompnet.app.engine import RomNetwork
+
+    path = tmp_path / "demo.prg"
+    path.write_bytes(_prg(0x0801, _basic(0x0801, 0x080D, bytes([0xA9, 0xFF, 0x85, 0x90, 0x60]))))
+    net = RomNetwork(tmp_path / "app.db", tmp_path / "work")
+    slug = net.import_rom(path, confirmed=True, log=lambda *_: None)
+    proj = net.project_row(slug)
+    agent, _token = net.local_agent("maxi")
+    first = net.store.one("SELECT * FROM functions WHERE project_id=? AND vram=?", proj["id"], 0x080D)
+    shift = first["rom_offset"] - 0x080D
+    tail = _WAIT_KEY[12:]
+    with net.store.tx() as c:  # as the split had it: the routine before at $0950, the head at $0959 in nobody's hands
+        c.execute("INSERT INTO functions(project_id,name,size,n_insns,target,vram,rom_offset,status,meta,unit) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?)", (proj["id"], "func_0950", 9, 3, bytes(9), 0x0950, shift + 0x0950,
+                                                  "asm", first["meta"], first["unit"]))
+        c.execute("INSERT INTO functions(project_id,name,size,n_insns,target,vram,rom_offset,status,meta,unit) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?)", (proj["id"], "func_0965", len(tail), 8, tail, 0x0965, shift + 0x0965,
+                                                  "asm", first["meta"], first["unit"]))
+    fn = net.store.one("SELECT * FROM functions WHERE project_id=? AND name='func_0965'", proj["id"])
+    assert net._c64_free(proj, fn) == [(0x0959, 0x0965)]
+    brief = net._asm_brief(fn, agent, "CLAIMED")
+    assert "### Where the split looks wrong" in brief and 'create_function(at="$0959")' in brief, brief
 
 
 def test_import_puts_routines_on_the_assembly_track(tmp_path):
@@ -747,6 +868,59 @@ def test_c64_a_routine_that_runs_on_into_the_next_waits_for_it(tmp_path):
     except NetworkError as e:
         assert "func_080d" in str(e), e
     claim_and_document("func_080d")
+
+
+def test_c64_compile_off_the_track_answers_instead_of_failing(tmp_path, monkeypatch):
+    """A documented C64 routine has no C behind it: compiling it again tells the agent so, and a tool that fails
+    some other way comes back as an error the agent reads, not one that ends its session."""
+    from decompnet.app import tools
+    from decompnet.app.engine import RomNetwork
+    from decompnet.network import NetworkError
+
+    path = tmp_path / "demo.prg"
+    path.write_bytes(_prg(0x0801, _basic(0x0801, 0x080D, bytes([0xA0, 0x00, 0x4C, 0x00, 0x02]))))
+    net = RomNetwork(tmp_path / "app.db", tmp_path / "work")
+    slug = net.import_rom(path, confirmed=True, log=lambda *_: None)
+    proj = net.project_row(slug)
+    agent, _token = net.local_agent("maxi")
+    fn = net.store.one("SELECT * FROM functions WHERE project_id=? AND vram=?", proj["id"], 0x080D)
+    with net.store.tx() as c:
+        c.execute("UPDATE functions SET status='documented' WHERE id=?", (fn["id"],))
+    source = "; enters the input buffer\nenter_buf:\n  ldy #$00\n  jmp BUF\n"
+    with pytest.raises(NetworkError) as e:
+        net.compile_and_diff(agent, fn["name"], source, slug)
+    assert "already documented" in str(e.value) and "claim_function" in str(e.value)
+    said = tools.call(net, agent, slug, "compile_and_diff", {"function": "$080D", "source": source})
+    assert said.startswith("error:") and "already documented" in said, said
+
+    def broken(*_a, **_k):
+        raise RuntimeError("disk on fire")
+    monkeypatch.setitem(tools.HANDLERS, "project_info", broken)
+    assert tools.call(net, agent, slug, "project_info", {}) == "error: project_info failed (RuntimeError: disk on fire)"
+
+
+def test_c64_documenting_with_a_real_label_names_the_routine(tmp_path):
+    """One compile does it: the label is the routine's new name, so no rename_symbol comes first."""
+    from decompnet.app.agents import _args_brief
+    from decompnet.app.engine import RomNetwork
+
+    path = tmp_path / "demo.prg"
+    path.write_bytes(_prg(0x0801, _basic(0x0801, 0x080D, bytes([0xA9, 0xFF, 0x85, 0x90, 0x60]))))
+    net = RomNetwork(tmp_path / "app.db", tmp_path / "work")
+    slug = net.import_rom(path, confirmed=True, log=lambda *_: None)
+    proj = net.project_row(slug)
+    agent, _token = net.local_agent("maxi")
+    fn = net.store.one("SELECT * FROM functions WHERE project_id=? AND vram=?", proj["id"], 0x080D)
+    auto = f"; sets the KERNAL status byte to $FF\n{fn['name']}:\n  lda #$FF\n  sta STATUS\n  rts\n"
+    said = net.compile_and_diff(agent, fn["name"], auto, slug)
+    assert "write a real one as the label" in said and "no rename_symbol needed" in said, said
+    named = "; sets the KERNAL status byte to $FF\nset_error_flag:\n  lda #$FF\n  sta STATUS\n  rts\n"
+    said = net.compile_and_diff(agent, fn["name"], named, slug)
+    assert "DOCUMENTED: set_error_flag" in said, said
+    row = net.store.one("SELECT name, status FROM functions WHERE id=?", fn["id"])
+    assert (row["name"], row["status"]) == ("set_error_flag", "documented")
+    assert _args_brief({"function": "x", "source": named}) == "x, 5 lines of assembly"
+    assert _args_brief({"source": "void f(void) {\n}\n"}) == "2 lines of C"
 
 
 def test_c64_agents_create_and_delete_routines(tmp_path):

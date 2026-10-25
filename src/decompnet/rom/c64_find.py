@@ -286,6 +286,36 @@ class Finder:
                 self.funcs[a].score = score
         return len(scores)
 
+    def reach_back(self, limit: int = 64) -> int:
+        """A probable routine that branches back before its own start: the start was a guess, and the code it branches
+        to is its head (the head scored low, say for calling a ROM that isn't mapped). When the bytes before it, from
+        just after other code, run straight into that target, the routine starts there instead."""
+        moved = 0
+        for old, f in sorted(self.funcs.items()):
+            if f.confidence != "probable" or not f.insns or (lo := min(f.insns)) >= old:
+                continue
+            first, a = None, lo - 1
+            while a >= max(0x200, lo - limit) and not self.code.get(a) and self.runs(a):
+                pc = a
+                while pc < lo:
+                    d = self.dec(pc)
+                    if not d or d[0] in ("brk", "rts", "rti", "jmp") or any(self.code.get(pc + i) for i in range(d[2])):
+                        break
+                    pc += d[2]
+                if pc == lo:
+                    first = a
+                a -= 1
+            if first is None or first in self.funcs:
+                continue
+            del self.funcs[old]
+            f.start = first
+            f.why.add(f"probable start moved back from ${old:04X}: it branches back to ${lo:04X}, which "
+                      f"${first:04X} runs into")
+            self.funcs[first] = f
+            self._flow(f)
+            moved += 1
+        return moved
+
     def _score(self, a: int) -> tuple[int, int, str] | None:
         """(score, size, how it ends) for a run of bytes at ``a`` read as a routine, or None when it doesn't read as one."""
         words, built, certain = self._words, self._built, self._certain
@@ -382,6 +412,7 @@ def find(ram: bytes, entry: int | None, *, p01: int | None = None, sp: int | Non
         if not f.resolve_pointers():
             break
     f.probable(min_score)
+    f.reach_back()
     order = sorted(f.funcs.values(), key=lambda x: x.start)
     return Result(order, f.coverage(), basic)
 

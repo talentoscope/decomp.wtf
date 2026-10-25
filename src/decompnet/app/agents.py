@@ -535,7 +535,9 @@ def _args_brief(args) -> str:
     parts = []
     for k, v in args.items():
         if k == "source":
-            parts.append(f"{len(str(v).splitlines())} lines of C")
+            # (documented assembly has a label line and no braces; anything else reads as C)
+            asm = "{" not in str(v) and re.search(r"(?m)^\s*[A-Za-z_.@]\w*:", str(v))
+            parts.append(f"{len(str(v).splitlines())} lines of {'assembly' if asm else 'C'}")
         elif isinstance(v, str):
             parts.append(v if len(v) < 40 else v[:37] + "…")
         elif v not in (None, "", {}):

@@ -35,6 +35,7 @@ _MNEMONICS = frozenset({"adc", "and", "asl", "bcc", "bcs", "beq", "bit", "bmi", 
                         "iny", "jmp", "jsr", "lda", "ldx", "ldy", "lsr", "nop", "ora", "pha", "php", "pla", "plp",
                         "rol", "ror", "rti", "rts", "sbc", "sec", "sed", "sei", "sta", "stx", "sty", "tax", "tay",
                         "tsx", "txa", "txs", "tya", "a", "x", "y"})
+_INSTRUCTIONS = _MNEMONICS - {"a", "x", "y"}
 
 
 @dataclass
@@ -45,6 +46,11 @@ class Routine:
     symbols: dict[str, int]
     flat: int = 0
     data: list[tuple[int, int, str]] = field(default_factory=list)
+    #: the project's routines by address: where the program has its own code (in RAM under a switched-out ROM,
+    #: say), its routine's name is the one, not the ROM's
+    own: dict[int, str] = field(default_factory=dict)
+    #: stretches of the program no routine and no data holds, (start, end), near this routine's branches
+    free: list[tuple[int, int]] = field(default_factory=list)
 
 
 def available() -> bool:
@@ -88,6 +94,18 @@ def parse(text: str) -> tuple[list[tuple[int, str, str]], list[tuple[int, str]],
         stmt = code.strip()
         if not stmt:
             continue
+        if (m := re.match(r"^([^\s:;]+)\s*:", stmt)) and not re.fullmatch(_IDENT, m.group(1)):
+            problems.append(f"line {n}: `{m.group(1)}` isn't a name: a label starts with a letter or _ "
+                            f"(`{'target_' + h.group(0) if (h := re.search(r'[0-9A-Fa-f]{4}', m.group(1))) else 'target'}:`)")
+            continue
+        word = stmt.split()[0]
+        if not stmt.startswith(".") and word.lower() not in _INSTRUCTIONS:
+            if re.fullmatch(_IDENT, stmt):
+                problems.append(f"line {n}: `{stmt}` on its own isn't an instruction: a name goes after one "
+                                f"(`lda {stmt}`), and a label takes a colon (`{stmt}:`)")
+            else:
+                problems.append(f"line {n}: `{word}` isn't a 6502 instruction")
+            continue
         if stmt.startswith(".") and not _DATA.match(stmt):
             problems.append(f"line {n}: `{stmt.split()[0]}` isn't taken here: instructions, labels, .byte and "
                             "NAME = $number only")
@@ -106,14 +124,22 @@ def contained(text: str) -> bool:
         return False
 
 
-def _substitute(line: str, mapping: dict[str, int], zp: set[str]) -> str:
-    def repl(m: re.Match) -> str:
-        name = m.group(0)
-        if name not in mapping or name.lower() in _MNEMONICS:
-            return name
-        return _render(mapping[name], zp=name in zp)
+_OFFSET = re.compile(rf"\s*([+-])\s*({_NUMBER})")
 
-    return re.sub(rf"\b{_IDENT}\b", repl, line)
+
+def _substitute(line: str, mapping: dict[str, int], zp: set[str]) -> str:
+    """Names become numbers. ``NAME+N`` / ``NAME-N`` (a table's second byte, a patched instruction's operand) is
+    worked out here, since py65 takes numbers only."""
+    def repl(m: re.Match) -> str:
+        name = m.group(1)
+        if name not in mapping or name.lower() in _MNEMONICS:
+            return m.group(0)
+        value, rest = mapping[name], m.group(2) or ""
+        for sign, number in _OFFSET.findall(rest):
+            value += _number(number) if sign == "+" else -_number(number)
+        return _render(value, zp=name in zp)
+
+    return re.sub(rf"\b({_IDENT})\b((?:{_OFFSET.pattern})*)", repl, line)
 
 
 def _data_bytes(text: str) -> bytes:
@@ -134,18 +160,27 @@ def _data_bytes(text: str) -> bytes:
     return bytes(out)
 
 
-def _assemble(items, label_at: dict[int, list[str]], mapping: dict[str, int], origin: int) -> tuple[bytes, list[tuple]]:
+def _assemble(items, label_at: dict[int, list[str]], mapping: dict[str, int], origin: int, *,
+              want: bytes | None = None, wide: set[int] | None = None) -> tuple[bytes, list[tuple]]:
     """Iteratively place labels and assemble. ``label_at`` maps a statement's line number to labels on it.
 
     A forward label is unknown until the pass that reaches it, so each pass substitutes from the
     addresses the previous pass recorded and only falls back to a placeholder while a name is still
     missing.
+
+    A name under $100 can be zero page or absolute. With ``want`` (the snapshot's bytes) a line takes
+    the absolute form when that is what the snapshot has there, and its line number goes into
+    ``wide``; the moved passes then pass the same ``wide`` so each line keeps its form.
     """
     zp = {name for name, value in mapping.items() if 0 <= value < 0x100}
+    if wide is None:
+        wide = set()
     places: dict[str, int] = {}
     rows: list[tuple] = []
     for _pass in range(8):
         pc, rows = origin, []
+        if want is not None:
+            wide.clear()  # decided again each pass, since early passes may hold placeholders
         fresh: dict[str, int] = {}
         pending: list[str] = []
         for line_no, kind, text in items:
@@ -161,7 +196,8 @@ def _assemble(items, label_at: dict[int, list[str]], mapping: dict[str, int], or
                 except ValueError as e:
                     raise AsmError(f"line {line_no}: invalid .byte") from e
             else:
-                substituted = _substitute(text, {**mapping, **places, **fresh}, zp)
+                names = {**mapping, **places, **fresh}
+                substituted = _substitute(text, names, set() if line_no in wide else zp)
                 try:
                     blob = c64.assemble(substituted, pc)
                 except Exception as e:
@@ -169,6 +205,16 @@ def _assemble(items, label_at: dict[int, list[str]], mapping: dict[str, int], or
                         blob = b"\xea"
                     else:
                         raise AsmError(f"line {line_no}: {e}") from e
+                if want is not None and line_no not in wide:
+                    at = pc - origin
+                    if blob != want[at:at + len(blob)] and (absolute := _substitute(text, names, set())) != substituted:
+                        try:
+                            other = c64.assemble(absolute, pc)
+                        except Exception:
+                            other = None
+                        if other is not None and other == want[at:at + len(other)]:
+                            blob = other
+                            wide.add(line_no)
             rows.append((line_no, pc - origin, text, blob))
             pc += len(blob)
         if pending:
@@ -213,26 +259,90 @@ def judge(r: Routine, text: str, tmp_root=None) -> Verdict:
     mapping = {n: v for n, v in {**r.symbols, **hw, **defines}.items() if n not in own or n in defines}
     # the routine's own name is its entry, not a free symbol
     mapping.pop(r.name, None)
+    wide: set[int] = set()
     try:
-        got, rows = _assemble(items, label_at, mapping, r.cpu)
+        got, rows = _assemble(items, label_at, mapping, r.cpu, want=r.code, wide=wide)
     except AsmError as e:
         return Verdict(False, 0, 0, [f"1. it doesn't assemble: {e}"], label)
     same = next((k for k, (a, b) in enumerate(zip(got, r.code)) if a != b), min(len(got), len(r.code)))
     if got != r.code:
+        at_row = {row[0]: r.cpu + row[1] for row in rows}
+        places = {name: at_row[line] for line, names in label_at.items() if line in at_row for name in names}
         return Verdict(False, same, len(got), [
-            f"1. the bytes differ ({same} of {len(r.code)} match, assembled {len(got)})"], label)
+            f"1. the bytes differ ({same} of {len(r.code)} match, assembled {len(got)})"]
+            + _first_difference(r, rows, same, places) + gap_notes(r), label)
     # two passes: addresses moved, and hardware moved, so a raw number fails exactly one of them
     addr_map = {n: (v if n in hw else _moved(v)) for n, v in mapping.items()}
     hw_map = {n: (_hw_moved(v) if (n in hw or c64_hw.name_of(v)) else v) for n, v in mapping.items()}
     try:
-        shifted, _rows = _assemble(items, label_at, addr_map, r.cpu)
-        hw_shifted, _hrows = _assemble(items, label_at, hw_map, r.cpu)
+        shifted, _rows = _assemble(items, label_at, addr_map, r.cpu, wide=set(wide))
+        hw_shifted, _hrows = _assemble(items, label_at, hw_map, r.cpu, wide=set(wide))
     except AsmError as e:
         return Verdict(False, len(r.code), len(got), [f"2. it doesn't assemble moved: {e}"], label)
     problems += _operand_checks(r, rows, got, shifted, hw_shifted)
     problems += _name_checks(label, header, globals_)
+    if problems:
+        problems += gap_notes(r)
     kept = "\n".join(line for line in text.splitlines() if not _DEFINE.match(line.split(";")[0]))
     return Verdict(not problems, len(r.code), len(got), problems, label, defines, kept.strip("\n") + "\n")
+
+
+def _first_difference(r: Routine, rows, same: int, places: dict[str, int] | None = None) -> list[str]:
+    """Which line the bytes first part at, what it became and what the snapshot has there. When it's a branch or
+    jump to a label in the wrong place, where the label is and where it has to go (or that the target is outside the
+    routine, where only `NAME = $addr` reaches)."""
+    places = places or {}
+    end = r.cpu + len(r.code)
+    for line_no, off, text, blob in rows:
+        if off <= same < off + max(len(blob), 1) and off < len(r.code):
+            mine, mine_len = mos6502.decode(blob[:3], r.cpu + off) if blob else ("nothing", 0)
+            theirs, theirs_len = mos6502.decode(r.code[off:off + 3], r.cpu + off)
+            note = (f"line {line_no}: `{text}` assembles to `{mine}` ({mine_len} bytes), but the snapshot has "
+                    f"`{theirs}` ({theirs_len} bytes) here")
+            if mine_len != theirs_len and mine.split()[0] == theirs.split()[0]:
+                note += (": write the address with four digits for the absolute form, two for zero page"
+                         if "$" in text else "")
+            _kind, target = mos6502.flow(theirs)
+            operand = text.split(None, 1)[1] if len(text.split(None, 1)) == 2 else ""
+            label = next((w for w in re.findall(rf"\b{_IDENT}\b", operand) if w in places), None)
+            if target is not None and label is not None and places[label] != target:
+                if not r.cpu <= target < end:
+                    note += (f". `{label}` is a label in this routine (at ${places[label]:04X}), but ${target:04X} is "
+                             f"outside it (it runs ${r.cpu:04X}-${end - 1:04X}). A label only marks an instruction "
+                             f"you write here, so define the name instead: `{label} = ${target:04X}`")
+                else:
+                    there = next((row for row in rows if r.cpu + row[1] == target), None)
+                    note += (f". `{label}` sits at ${places[label]:04X}; ${target:04X} is "
+                             + (f"line {there[0]} (`{there[2]}`): put the label on that line" if there else
+                                "inside another instruction as you've written it"))
+            return [note]
+    return []
+
+
+def gap_notes(r: Routine) -> list[str]:
+    """Branches and jumps out of the routine into bytes no routine or data holds: the split probably cut the routine
+    short (bytes just before it), or missed one. The agent fixes it with create_function / merge_function."""
+    out, seen = [], set()
+    off = 0
+    while off < len(r.code):
+        text, ln = mos6502.decode(r.code[off:off + 3], r.cpu + off)
+        _kind, target = mos6502.flow(text)
+        for lo, hi in r.free:
+            if target is not None and lo <= target < hi and (lo, hi) not in seen:
+                seen.add((lo, hi))
+                note = (f"`{text}` at ${r.cpu + off:04X} goes to ${target:04X}, in ${lo:04X}-${hi - 1:04X}: bytes no "
+                        "routine holds. ")
+                if hi == r.cpu:
+                    note += (f"This routine probably starts at ${lo:04X} and the split cut it short: "
+                             f"create_function(at=\"${lo:04X}\") makes those bytes a routine, then "
+                             f"merge_function(\"{r.name}\") joins the two, and you document it whole. (Until then, "
+                             f"`NAME = ${target:04X}` names the target.)")
+                else:
+                    note += (f"They're probably a routine the split missed: create_function(at=\"${lo:04X}\") "
+                             f"adds it. (`NAME = ${target:04X}` names the target meanwhile.)")
+                out.append(note)
+        off += max(ln, 1)
+    return out
 
 
 def _operand_checks(r: Routine, rows, got: bytes, shifted: bytes, hw_shifted: bytes) -> list[str]:
@@ -258,7 +368,11 @@ def _operand_checks(r: Routine, rows, got: bytes, shifted: bytes, hw_shifted: by
             continue
         if role == "cjump" and r.cpu <= target < r.cpu + len(r.code):
             continue
+        if role == "mem" and r.cpu <= target < r.cpu + len(r.code) and _named(text):
+            continue  # its own bytes by a label (`sta patch+1`: self-modifying code): a label doesn't move
         hw = c64_hw.name_of(target) or (c64_hw.name_of(target, call=True) if role in ("call", "jump") else None)
+        if role in ("call", "jump") and target in r.own and not c64_hw.name_of(target):
+            hw = None  # the program's own routine there, not the ROM's
         same_addr = shifted[off:off + ln] == got[off:off + ln]
         same_hw = hw_shifted[off:off + ln] == got[off:off + ln]
         if hw and same_hw:
@@ -266,6 +380,13 @@ def _operand_checks(r: Routine, rows, got: bytes, shifted: bytes, hw_shifted: by
         elif not hw and same_addr and role in ("call", "jump", "mem"):
             out.append(f"2. line {line_no}: `{text}` leaves ${target:04X} as a number; name it")
     return out
+
+
+def _named(text: str) -> bool:
+    """Whether an instruction's operand is written with a name rather than a number."""
+    parts = text.split(None, 1)
+    operand = parts[1] if len(parts) == 2 else ""
+    return any(w.lower() not in _MNEMONICS for w in re.findall(rf"\b{_IDENT}\b", operand.split(";")[0]))
 
 
 def _abs(text: str) -> int | None:
@@ -278,7 +399,8 @@ def _abs(text: str) -> int | None:
 def _name_checks(label: str, header: list[str], labels: list[str]) -> list[str]:
     out = []
     if AUTO.match(label) or re.fullmatch(r"func_[0-9A-Fa-f]{4}", label):
-        out.append(f"6. `{label}` is an automatic name: say what the routine does")
+        out.append(f"6. `{label}` is an automatic name: write a real one as the label, and it becomes the routine's "
+                   "name when it's documented (no rename_symbol needed)")
     if not header:
         out.append("6. a comment before the routine should say what it does")
     for name in labels[1:]:
@@ -290,7 +412,7 @@ def _name_checks(label: str, header: list[str], labels: list[str]) -> list[str]:
 def draft(r: Routine) -> str:
     """A listing that rebuilds the bytes, with hardware and known symbols filled in. The name and the
     comment are still the agent's."""
-    names = {}
+    names = dict(r.own)  # the project's own routines first, over a ROM name at the same address
     for name, value in r.symbols.items():
         names.setdefault(value, name)
     lines = [f"; {r.name}"]

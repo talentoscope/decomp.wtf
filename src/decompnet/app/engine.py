@@ -107,6 +107,11 @@ ASM_ARCHS = ("sm83", "z80", "mos6502", "6510")
 _GENERATED = re.compile(r"^(?:Call|Func|Jump|jr)_[0-9a-f]{3}_[0-9a-f]{4}$|^RST_[0-9a-f]{2}$|Interrupt$|^Boot$")
 
 
+def _c64_under_rom(cpu: int) -> str:
+    """Which C64 ROM normally sits at ``cpu`` (BASIC at $A000-$BFFF, KERNAL at $E000-$FFFF); empty elsewhere."""
+    return "BASIC" if 0xA000 <= cpu <= 0xBFFF else "KERNAL" if 0xE000 <= cpu <= 0xFFFF else ""
+
+
 def _set_aside(meta: str | None) -> dict:
     """Why a function is set aside, for the page: a rule's reason, or an agent's for a person (`review`)."""
     m = json.loads(meta or "{}")
@@ -492,7 +497,9 @@ class RomNetwork(Network):
         if proj["arch"] == "6510":
             from ..rom import c64_hw
 
-            text = c64_hw.name_listing(text)
+            own = {r["vram"]: r["name"] for r in self.store.all(
+                "SELECT name, vram FROM functions WHERE project_id=? AND vram IS NOT NULL", proj["id"])}
+            text = c64_hw.name_listing(text, own)
         if proj["arch"] == "sm83" and fn["target"] and _listed(text) != (fn["n_insns"] or 0):
             text = self._sm83_listing(proj, fn)
         if proj["arch"] == "sm83":  # its registers by name (hardware.inc 6.0)
@@ -2988,7 +2995,28 @@ class RomNetwork(Network):
         """C for the C track; for a hand-written Game Boy routine (the assembly track), its documented assembly."""
         if not self.fork_slug(project) and self._on_asm_track(function, project):
             return self.document_function(agent, project, function, source)
+        if why := self._c64_off_track(function, project):
+            raise NetworkError(why)
         return super().compile_and_diff(agent, function, source, project)
+
+    def _c64_off_track(self, function: str, project: str | None) -> str:
+        """Why a Commodore 64 routine that isn't on the assembly track can't be compiled: the track has no C, so
+        nothing on it may fall through to the C compiler. Empty for anything else."""
+        try:
+            fn = self._function(function, project)
+        except NetworkError:
+            return ""
+        proj = self.store.one("SELECT arch FROM projects WHERE id=?", fn["project_id"])
+        if not proj or proj["arch"] != "6510":
+            return ""
+        name = fn["name"]
+        if fn["status"] == "documented":
+            return f"`{name}` is already documented in assembly, so there's nothing to compile: claim_function for the next routine"
+        if json.loads(fn["meta"] or "{}").get("review"):
+            return f"`{name}` is flagged for review and waits for a person: claim_function for the next routine"
+        why = _set_aside(fn["meta"]).get("why") or fn["status"]
+        return (f"`{name}` isn't a routine to document ({why}), and a Commodore 64 project has no C to compile: "
+                "claim_function for the next routine")
 
     def _asm_brief(self, fn, agent, header: str) -> str:
         """A hand-written routine's brief on the assembly track: the routine as the split has it, a draft that rebuilds
@@ -3004,6 +3032,12 @@ class RomNetwork(Network):
                  f"{fn['size']} bytes, {fn['n_insns']} instructions, bank {bank} at ${cpu:04X} (ROM offset "
                  f"0x{fn['rom_offset'] or 0:X})")
         lines = [f"## {header} (assembly track): {proj['slug']}/{fn['name']}", where]
+        if c64 and (under := _c64_under_rom(cpu)):
+            lines.append(f"This is the program's own code in RAM at ${cpu:04X}, where the {under} ROM normally sits: the "
+                         "program switches that ROM out (the processor port, `CPU_PORT`) and runs from the RAM under it. "
+                         "The ROM names and descriptions in the header are about the ROM, not this code, so don't read "
+                         "this routine or the addresses near it as BASIC or KERNAL routines or variables: use the "
+                         "project's names here, and name the rest yourself.")
         if claim:
             who = "you" if agent and claim["agent_id"] == agent.id else self._agent_name(claim["agent_id"])
             lines.append(f"claimed by {who}, lease expires in {int(claim['expires_at'] - time.time()) // 60} min "
@@ -3021,6 +3055,8 @@ class RomNetwork(Network):
                       *called]
         routine = self._routine(proj, fn)
         inside = [f"- {r[2]} at ${routine.cpu + max(0, r[0] - routine.flat):04X}, {r[1]} bytes" for r in routine.data]
+        if c64 and (gaps := judge.gap_notes(routine)):
+            lines += ["", "### Where the split looks wrong", *[f"- {g}" for g in gaps]]
         if inside:
             lines += ["", f"### Data the map has in it ({'.db / .dw' if sms else '.byte / .word' if nes or c64 else 'db / dw'} "
                           "here)", *inside]
@@ -3043,8 +3079,9 @@ class RomNetwork(Network):
             "1. it assembles to exactly these bytes (py65: `lda #$00`, `sta VIC_BORDERCOLOR`, `bne loop`, `.byte`); "
             "2. every address is a name (labels, the project's names, or `wName = $033C`); 3. a jsr or jmp names the "
             "routine it reaches; 4. .byte/.word only over the data above; 5. hardware, the processor port and "
-            "KERNAL/BASIC calls by name (`sta VIC_BORDERCOLOR`, `jsr CHROUT`, `lda CPU_PORT`); 6. a real name, and a "
-            "comment before it saying what it does." if c64 else
+            "KERNAL/BASIC calls by name (`sta VIC_BORDERCOLOR`, `jsr CHROUT`, `lda CPU_PORT`); 6. a real name as its label "
+            "(it becomes the routine's name when documented: no rename_symbol first), and a comment before it saying "
+            "what it does." if c64 else
             "1. it assembles to exactly these bytes (WLA-DX: `ld a, (wName)`, `jr nz, @loop`, `.db`); 2. every address "
             "in it is a name (labels, the project's names, or `.DEFINE wName $C0A2`; a 16-bit number that isn't an "
             "address gets `; number`); 3. a call into slot 1 or 2 names the function in the bank that's mapped there; "
@@ -3080,6 +3117,30 @@ class RomNetwork(Network):
         why = _set_aside(fn["meta"]).get("why") or ""
         return not any(k in why for k in self.NOT_CODE)
 
+    def _c64_free(self, proj, fn) -> list[tuple[int, int]]:
+        """Stretches no routine and no data holds that a C64 routine branches or jumps into: (start, end), bounded by
+        the routines around them, and short (a missed routine's worth of bytes, not empty memory)."""
+        from ..rom import mos6502
+
+        cpu, code = fn["vram"] or 0, bytes(fn["target"] or b"")
+        shift = (fn["rom_offset"] or 0) - cpu
+        spans = [(r["vram"], r["vram"] + (r["size"] or 0)) for r in self.store.all(
+            "SELECT vram, size FROM functions WHERE project_id=? AND vram IS NOT NULL", proj["id"])]
+        spans += [(r["rom_offset"] - shift, r["rom_offset"] - shift + (r["size"] or 0)) for r in self.store.all(
+            "SELECT rom_offset, size FROM data_regions WHERE project_id=?", proj["id"])]
+        out, off = [], 0
+        while off < len(code):
+            text, ln = mos6502.decode(code[off:off + 3], cpu + off)
+            _kind, t = mos6502.flow(text)
+            off += max(ln, 1)
+            if t is None or cpu <= t < cpu + len(code) or any(lo <= t < hi for lo, hi in spans):
+                continue
+            lo = max((hi for _lo, hi in spans if hi <= t), default=None)
+            hi = min((lo2 for lo2, _hi in spans if lo2 > t), default=None)
+            if lo is not None and hi is not None and hi - lo <= self.CREATE_LONGEST and (lo, hi) not in out:
+                out.append((lo, hi))
+        return out
+
     def _routine(self, proj, fn):
         """What the assembly judge needs about a function (rom/gb_asm.Routine, rom/sms_asm.Routine)."""
         from ..rom import gb_asm, gb_hw, sms_asm
@@ -3101,7 +3162,9 @@ class RomNetwork(Network):
         if proj["arch"] == "6510":
             from ..rom import c64_asm
 
-            return c64_asm.Routine(fn["name"], fn["vram"] or 0, bytes(fn["target"] or b""), symbols, flat=flat, data=data)
+            return c64_asm.Routine(fn["name"], fn["vram"] or 0, bytes(fn["target"] or b""), symbols, flat=flat, data=data,
+                                   own={r["vram"]: r["name"] for r in rows if r["vram"] is not None},
+                                   free=self._c64_free(proj, fn))
         if proj["arch"] == "mos6502":  # (offsets are the file's; banks count from the PRG's start)
             from ..rom import nes_asm
 
