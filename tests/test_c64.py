@@ -830,6 +830,24 @@ def test_c64_progress_counts_documented_routines(tmp_path):
     assert net.overview(slug)["asm_only"]["to_document"] == before - 2
 
 
+
+def test_c64_claimed_routine_pulses_as_working_on_the_map(tmp_path):
+    """A claimed assembly routine shows as working on the function map so the ROM map can pulse it."""
+    from decompnet.app.engine import RomNetwork
+
+    code = bytes([0x20, 0x14, 0x08, 0xAD, 0x18, 0x08, 0x60, 0x8D, 0x18, 0x08, 0x60, 0x00, 0xC6, 0x71])
+    path = tmp_path / "demo.prg"
+    path.write_bytes(_prg(0x0801, _basic(0x0801, 0x080D, code)))
+    net = RomNetwork(tmp_path / "app.db", tmp_path / "work")
+    slug = net.import_rom(path, confirmed=True, log=lambda *_: None)
+    agent, _ = net.local_agent("maxi")
+    net.claim(agent, slug, track="asm")
+    row = next(r for r in net.function_map(slug) if r.get("agent") == "maxi")
+    assert row["status"] == "working" and row.get("track"), row
+    # still asm in the database: documenting is what finishes it
+    fn = net.store.one("SELECT status FROM functions WHERE name=?", row["name"])
+    assert fn["status"] == "asm"
+
 def test_c64_sidebar_and_pace_count_documented_routines(tmp_path):
     """The project list (left panel) carries documented progress, and pace counts a documented routine."""
     from decompnet.app.engine import RomNetwork

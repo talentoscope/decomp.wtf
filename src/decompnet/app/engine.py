@@ -3848,7 +3848,10 @@ class RomNetwork(Network):
         remote = {key(c): "@" + c["agent"] for c in (link.claims if link is not None else [])}
         sm83 = proj["arch"] in ASM_ARCHS  # (the assembly track's consoles)
         return [{"name": r["name"], "vram": r["vram"], "size": r["size"], "insns": r["n_insns"], "unit": r["unit"],
-                 "status": r["status"] if r["status"] in ("matched", "asm", "documented") else "working" if (r["agent"] or key(r) in remote) else "open",
+                 # claimed asm routines are "working" so the map pulses them (matched/documented win; else a claim)
+                 "status": (r["status"] if r["status"] in ("matched", "documented")
+                            else "working" if (r["agent"] or key(r) in remote)
+                            else "asm" if r["status"] == "asm" else "open"),
                  "best": r["best_score"], "attempts": r["attempts"], "agent": r["agent"] or remote.get(key(r)),
                  "matched_at": r["matched_at"], "matched_by": r["matched_by"], "ignored": bool(r["ignored"]),
                  **(_set_aside(r["meta"]) if r["status"] == "asm" else {}),

@@ -1657,7 +1657,10 @@ function applyClaims(draw = true) {
   const working = new Map(S.claims.map((c) => [c.name, c.agent]));
   let changed = false;
   for (const f of S.map) {
-    const status = ["matched", "asm", "documented"].includes(f.status) ? f.status : working.has(f.name) ? "working" : "open";
+    // assembly-track rows stay "asm" in the DB while claimed; pulse them as working, then put them back
+    const done = f.status === "matched" || f.status === "documented";
+    const asm = f.track || f.review || f.why || f.status === "asm";
+    const status = done ? f.status : working.has(f.name) ? "working" : asm ? "asm" : "open";
     if (status !== f.status) { f.status = status; changed = true; }
     f.agent = working.get(f.name) || null;
   }
