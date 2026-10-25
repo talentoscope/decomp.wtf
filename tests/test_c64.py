@@ -369,6 +369,52 @@ def test_c64_brief_points_at_bytes_no_routine_holds(tmp_path):
     assert "### Where the split looks wrong" in brief and 'create_function(at="$0959")' in brief, brief
 
 
+# graphics read as code, as 1942's $A686 decodes: dec $2121, and ($21,x) four times, ror $2121, and ($b4,x), jmp $4c4c
+_PATTERN = bytes.fromhex("ce2121" + "2121" * 4 + "6e2121" + "21b4" + "4c4c4c")
+# a real routine: clear $1100-$11FF and return
+_CLEAR = bytes.fromhex("a900a2009d0011e8d0fa60")
+
+
+def test_asm_data_notes_need_two_signs_of_data():
+    from decompnet.rom import c64_asm
+
+    notes = c64_asm.data_notes(c64_asm.Routine("rotate_and_or", 0xA686, _PATTERN, {}, callers=0))
+    assert len(notes) == 3, notes
+    assert any("`and ($21,x)` at $A689 comes twice" in n for n in notes)
+    assert any("$2121, an address made of one byte twice" in n for n in notes)
+    assert any("no routine calls" in n for n in notes)
+    # a real routine nothing calls (a vector's, say) shows one sign: not enough to speak up
+    assert c64_asm.data_notes(c64_asm.Routine("clear", 0x1519, _CLEAR, {}, callers=0)) == []
+    assert c64_asm.data_notes(c64_asm.Routine("clear", 0x1519, _CLEAR, {}, callers=2)) == []
+    # the same bytes twice, running off the end: two signs
+    twin = c64_asm.data_notes(c64_asm.Routine("ops", 0x3E88, _CLEAR[:-1], {}, callers=1, twins=[0x4E88]))
+    assert len(twin) == 2 and "$4E88" in twin[1], twin
+
+
+def test_c64_brief_says_when_a_routine_looks_like_data(tmp_path):
+    from decompnet.app.engine import RomNetwork
+
+    path = tmp_path / "demo.prg"
+    path.write_bytes(_prg(0x0801, _basic(0x0801, 0x080D, bytes([0xA9, 0xFF, 0x85, 0x90, 0x60]))))
+    net = RomNetwork(tmp_path / "app.db", tmp_path / "work")
+    slug = net.import_rom(path, confirmed=True, log=lambda *_: None)
+    proj = net.project_row(slug)
+    agent, _token = net.local_agent("maxi")
+    first = net.store.one("SELECT * FROM functions WHERE project_id=? AND vram=?", proj["id"], 0x080D)
+    shift = first["rom_offset"] - 0x080D
+    with net.store.tx() as c:
+        for name, at, code in (("func_a686", 0xA686, _PATTERN), ("func_1519", 0x1519, _CLEAR)):
+            c.execute("INSERT INTO functions(project_id,name,size,n_insns,target,relocs,vram,rom_offset,status,meta,"
+                      "unit) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (proj["id"], name, len(code), 8, code, "[]", at,
+                                                              shift + at, "asm", first["meta"], first["unit"]))
+    fn = net.store.one("SELECT * FROM functions WHERE project_id=? AND name='func_a686'", proj["id"])
+    assert net._c64_seen(proj, fn) == {"callers": 0, "twins": []}
+    brief = net._asm_brief(fn, agent, "CLAIMED")
+    assert "### This may be data, not code" in brief and "delete_function(" in brief, brief
+    real = net.store.one("SELECT * FROM functions WHERE project_id=? AND name='func_1519'", proj["id"])
+    assert "This may be data" not in net._asm_brief(real, agent, "CLAIMED")
+
+
 def test_import_puts_routines_on_the_assembly_track(tmp_path):
     from decompnet.app.engine import RomNetwork
 

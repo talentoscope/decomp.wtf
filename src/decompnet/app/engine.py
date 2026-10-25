@@ -3057,6 +3057,13 @@ class RomNetwork(Network):
         inside = [f"- {r[2]} at ${routine.cpu + max(0, r[0] - routine.flat):04X}, {r[1]} bytes" for r in routine.data]
         if c64 and (gaps := judge.gap_notes(routine)):
             lines += ["", "### Where the split looks wrong", *[f"- {g}" for g in gaps]]
+        if c64 and (signs := judge.data_notes(routine)):
+            lines += ["", "### This may be data, not code",
+                      "The function finder is generous, so some of what it marks is graphics or a table read as "
+                      "instructions. Look before you document it:", *[f"- {g}" for g in signs],
+                      "If these bytes are data, don't document them: delete_function(function=..., reason=...) says "
+                      "so, and the bytes go back to data. If you can't tell, flag_for_review. Only document it when "
+                      "you can say what calls it and what it does for the program."]
         if inside:
             lines += ["", f"### Data the map has in it ({'.db / .dw' if sms else '.byte / .word' if nes or c64 else 'db / dw'} "
                           "here)", *inside]
@@ -3141,6 +3148,18 @@ class RomNetwork(Network):
                 out.append((lo, hi))
         return out
 
+    def _c64_seen(self, proj, fn) -> dict:
+        """How the rest of a C64 program sees a routine, for c64_asm.data_notes: how many calls, jumps and branches in
+        other routines reach its start, and which other routines have exactly its bytes."""
+        cpu, code = fn["vram"] or 0, bytes(fn["target"] or b"")
+        callers, twins = 0, []
+        for r in self.store.all("SELECT id, vram, size, relocs, target FROM functions WHERE project_id=? AND id<>?",
+                                proj["id"], fn["id"]):
+            callers += sum(1 for ref in json.loads(r["relocs"] or "[]") if ref[1] == 10 and ref[2] == cpu)
+            if len(code) >= 6 and bytes(r["target"] or b"") == code and r["vram"] is not None:
+                twins.append(r["vram"])
+        return {"callers": callers, "twins": sorted(twins)}
+
     def _routine(self, proj, fn):
         """What the assembly judge needs about a function (rom/gb_asm.Routine, rom/sms_asm.Routine)."""
         from ..rom import gb_asm, gb_hw, sms_asm
@@ -3164,7 +3183,7 @@ class RomNetwork(Network):
 
             return c64_asm.Routine(fn["name"], fn["vram"] or 0, bytes(fn["target"] or b""), symbols, flat=flat, data=data,
                                    own={r["vram"]: r["name"] for r in rows if r["vram"] is not None},
-                                   free=self._c64_free(proj, fn))
+                                   free=self._c64_free(proj, fn), **self._c64_seen(proj, fn))
         if proj["arch"] == "mos6502":  # (offsets are the file's; banks count from the PRG's start)
             from ..rom import nes_asm
 

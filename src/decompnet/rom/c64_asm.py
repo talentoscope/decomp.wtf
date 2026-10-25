@@ -51,6 +51,10 @@ class Routine:
     own: dict[int, str] = field(default_factory=dict)
     #: stretches of the program no routine and no data holds, (start, end), near this routine's branches
     free: list[tuple[int, int]] = field(default_factory=list)
+    #: how many calls, jumps and branches elsewhere in the program reach this routine's start (None: not known)
+    callers: int | None = None
+    #: other routines with exactly these bytes, by address
+    twins: list[int] = field(default_factory=list)
 
 
 def available() -> bool:
@@ -343,6 +347,48 @@ def gap_notes(r: Routine) -> list[str]:
                 out.append(note)
         off += max(ln, 1)
     return out
+
+
+DATA_SIGNS = 2  # how many signs make data_notes speak up: one alone is common enough in real code
+
+
+def data_notes(r: Routine) -> list[str]:
+    """Signs that the bytes the finder took for a routine are data (graphics, tables, text), not code. The finder is
+    generous on purpose, so some of what it marks is data; the agent decides, and delete_function is how it says so.
+    Empty unless at least DATA_SIGNS of them show up together."""
+    ins, off = [], 0
+    while off < len(r.code):
+        text, ln = mos6502.decode(r.code[off:off + 3], r.cpu + off)
+        ins.append((r.cpu + off, text, ln))
+        off += max(ln, 1)
+    if not ins:
+        return []
+    signs = []
+    bad = [(a, t) for a, t, _ln in ins if t.startswith("db ")]
+    if bad:
+        signs.append(f"${bad[0][0]:04X} isn't an instruction at all (`{bad[0][1]}`: no 6502 opcode)")
+    for (a, t, ln), (_b, u, _l) in zip(ins, ins[1:]):
+        if t == u and ln > 1 and not t.startswith(("b", "jmp", "jsr")):
+            signs.append(f"`{t}` at ${a:04X} comes twice in a row: the same instruction on the same address does "
+                         "nothing useful a second time, while a byte pattern repeats like that")
+            break
+    for a, t, ln in ins:
+        m = re.search(r"\$([0-9a-f]{2})([0-9a-f]{2})\b", t)
+        if ln == 3 and m and m.group(1) == m.group(2):
+            signs.append(f"`{t}` at ${a:04X} uses ${m.group(1).upper() * 2}, an address made of one byte twice, "
+                         "as filled-in graphics or a table's repeating bytes read as code do")
+            break
+    last = ins[-1][1].split()[0]
+    if last not in ("rts", "rti", "jmp", "brk"):
+        signs.append(f"it ends on `{ins[-1][1]}` at ${ins[-1][0]:04X} with no rts, rti or jmp, so it runs on into "
+                     "whatever comes next (fine only if that's the next routine on purpose)")
+    if r.callers == 0:
+        signs.append("no routine calls, jumps or branches to it (an interrupt handler or a routine in a table of "
+                     "addresses is reached another way: look for the code that stores its address)")
+    if r.twins:
+        signs.append("exactly the same bytes are also at " + ", ".join(f"${t:04X}" for t in r.twins[:4]) +
+                     ": a repeated table or graphic is more likely than the same routine twice")
+    return signs if len(signs) >= DATA_SIGNS else []
 
 
 def _operand_checks(r: Routine, rows, got: bytes, shifted: bytes, hw_shifted: bytes) -> list[str]:
