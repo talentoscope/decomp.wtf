@@ -415,6 +415,42 @@ def test_c64_brief_says_when_a_routine_looks_like_data(tmp_path):
     assert "This may be data" not in net._asm_brief(real, agent, "CLAIMED")
 
 
+def test_asm_judge_takes_rom_routine_names_and_frees_them_under_the_rom():
+    from decompnet.rom import c64_asm, c64_hw
+
+    def problems(cpu, code, line):
+        r = c64_asm.Routine("f", cpu, bytes.fromhex(code), c64_hw.hardware_names())
+        return c64_asm.judge(r, f"keys = $ea87\n; forward\nforward_it:\n  {line}\n").problems
+
+    rom_only = [a for a, (n, _k, _d) in c64_hw.rom_by_addr().items()
+                if 0xE000 <= a < 0xFF81 and c64_hw.name_of(a, call=True) and not c64_hw.name_of(a)
+                and a not in c64_hw.ALIASES]
+    assert 0xEA87 in rom_only  # SCAN_KEYBOARD: a name from the ROM listing, not the jump table
+    # from ordinary RAM the ROM is in: the ROM's routine, by its name; a number still isn't one
+    assert problems(0x1000, "2087ea", "jsr SCAN_KEYBOARD") == []
+    assert any(p.startswith("5.") for p in problems(0x1000, "2087ea", "jsr $ea87"))
+    assert any(p.startswith("5.") for p in problems(0x1000, "2087ea", "jsr keys"))
+    names = c64_hw.hardware_names()
+    for a in rom_only:  # every ROM-listing name, not just one: it stands for its address, and the judge takes it
+        name = c64_hw.name_of(a, call=True)
+        assert names[name] == a, (name, hex(a))
+    for a in rom_only[:: max(1, len(rom_only) // 40)] + [0xF4A5, 0xF5ED]:
+        name = c64_hw.name_of(a, call=True)
+        assert problems(0x1000, f"20{a & 0xFF:02x}{a >> 8:02x}", f"jsr {name}") == [], name
+    assert c64_hw.name_of(0xF4A5, call=True) == "LOAD_F4A5" and c64_hw.name_of(0xFFD5, call=True) == "LOAD"
+    # in RAM under the KERNAL the ROM is out: the bytes there are the program's, so any name is right
+    for cpu in (0xFF9F, 0xE100):
+        assert problems(cpu, "4c87ea", "jmp keys") == []
+        assert problems(cpu, "4c87ea", "jmp SCAN_KEYBOARD") == []
+        assert problems(cpu, "4c87ea", "jmp $ea87") == ["2. line 4: `jmp $ea87` leaves $EA87 as a number; name it"]
+    # under BASIC, only BASIC is out: a KERNAL routine is still the KERNAL's
+    assert problems(0xA100, "4c87ea", "jmp SCAN_KEYBOARD") == []
+    assert any(p.startswith("5.") for p in problems(0xA100, "4c87ea", "jmp keys"))
+    # hardware stays the hardware's wherever the code is
+    r = c64_asm.Routine("f", 0xFF00, bytes.fromhex("8d20d0"), c64_hw.hardware_names())
+    assert any(p.startswith("5.") for p in c64_asm.judge(r, "; x\nset_it:\n  sta $d020\n").problems)
+
+
 def test_import_puts_routines_on_the_assembly_track(tmp_path):
     from decompnet.app.engine import RomNetwork
 

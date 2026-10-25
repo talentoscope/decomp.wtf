@@ -286,6 +286,23 @@ def rom_by_addr() -> dict[int, tuple[str, str, str]]:
 
 
 @lru_cache(maxsize=1)
+def _rom_names() -> dict[int, str]:
+    """address -> the one name of each BASIC / KERNAL routine or table. The jump table's names (ALIASES) win; a name
+    from the ROM listing that some other address already has gets its address added (LOAD at $F4A5 is the internal
+    load, `LOAD_F4A5`, as LOAD is the jump table's $FFD5), so every name stands for one address and back."""
+    taken = {name: addr for addr, name, _desc in _ROWS}
+    taken.update({name: addr for addr, name in ALIASES.items()})
+    out: dict[int, str] = {}
+    for addr, (sym, _title, _d) in sorted(rom_by_addr().items()):
+        name = ALIASES.get(addr, sym)
+        if taken.get(name, addr) != addr:
+            name = f"{name}_{addr:04X}"
+        taken.setdefault(name, addr)
+        out[addr] = name
+    return out
+
+
+@lru_cache(maxsize=1)
 def _desc() -> dict[int, str]:
     text = {addr: desc for addr, _name, desc in _ROWS}
     for addr, (_sym, _title, desc) in rom_by_addr().items():
@@ -328,9 +345,7 @@ def name_of(addr: int, call: bool = False) -> str | None:
     if call:
         if addr in ALIASES:
             return ALIASES[addr]
-        rom = rom_by_addr().get(addr)
-        if rom is not None:
-            return rom[0]
+        return _rom_names().get(addr)
     return None
 
 
@@ -416,8 +431,8 @@ def symbols() -> list[tuple[str, int, str, str]]:
         seen.add(name)
         rows.append((name, addr, "data", desc))
     code = {addr for addr, kind, *_ in ((e[0], e[1]) for e in ENTRIES) if kind in ("b", "c")}
-    for addr, (sym, _title, desc) in sorted(rom_by_addr().items()):
-        name = ALIASES.get(addr, sym)
+    for addr, (_sym, _title, desc) in sorted(rom_by_addr().items()):
+        name = _rom_names()[addr]
         if name in seen:
             continue
         seen.add(name)
@@ -429,6 +444,6 @@ def hardware_names() -> dict[str, int]:
     """name -> address, for the assembly judge's hardware check. Mirrors are not separate names."""
     out = {name: addr for addr, name, _desc in _ROWS}
     out.update({name: addr for addr, name in ALIASES.items()})
-    for addr, (sym, _t, _d) in rom_by_addr().items():
-        out.setdefault(ALIASES.get(addr, sym), addr)
+    for addr, name in _rom_names().items():
+        out.setdefault(name, addr)
     return out

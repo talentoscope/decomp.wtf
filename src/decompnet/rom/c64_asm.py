@@ -238,9 +238,21 @@ def _moved(value: int) -> int:
 
 
 def _hw_moved(value: int) -> int:
-    if c64_hw.name_of(value) or value in c64_hw.ALIASES:
+    if c64_hw.name_of(value) or value in c64_hw.ALIASES or c64_hw.name_of(value, call=True):
         return (value + 0x10) & 0xFFFF
     return value
+
+
+def _switched_out(cpu: int) -> tuple[tuple[int, int], ...]:
+    """The ROM areas a routine at ``cpu`` shows are switched out: its own code is in RAM there. Under BASIC
+    ($A000-$BFFF), BASIC is out; under the KERNAL ($E000-$FFFF), the KERNAL is, and on the C64 that takes BASIC out
+    with it (no processor port setting has the KERNAL out and BASIC in)."""
+    basic, kernal = (0xA000, 0xC000), (0xE000, 0x10000)
+    if kernal[0] <= cpu < kernal[1]:
+        return basic, kernal
+    if basic[0] <= cpu < basic[1]:
+        return (basic,)
+    return ()
 
 
 def judge(r: Routine, text: str, tmp_root=None) -> Verdict:
@@ -417,13 +429,14 @@ def _operand_checks(r: Routine, rows, got: bytes, shifted: bytes, hw_shifted: by
         if role == "mem" and r.cpu <= target < r.cpu + len(r.code) and _named(text):
             continue  # its own bytes by a label (`sta patch+1`: self-modifying code): a label doesn't move
         hw = c64_hw.name_of(target) or (c64_hw.name_of(target, call=True) if role in ("call", "jump") else None)
-        if role in ("call", "jump") and target in r.own and not c64_hw.name_of(target):
-            hw = None  # the program's own routine there, not the ROM's
+        if role in ("call", "jump") and not c64_hw.name_of(target) and (
+                target in r.own or any(lo <= target < hi for lo, hi in _switched_out(r.cpu))):
+            hw = None  # the program's own routine there, or RAM while the ROM is switched out: not the ROM's
         same_addr = shifted[off:off + ln] == got[off:off + ln]
         same_hw = hw_shifted[off:off + ln] == got[off:off + ln]
         if hw and same_hw:
             out.append(f"5. line {line_no}: `{text}` uses ${target:04X}, which is {hw}")
-        elif not hw and same_addr and role in ("call", "jump", "mem"):
+        elif not hw and same_addr and same_hw and role in ("call", "jump", "mem"):  # (a ROM name moves in the other)
             out.append(f"2. line {line_no}: `{text}` leaves ${target:04X} as a number; name it")
     return out
 
