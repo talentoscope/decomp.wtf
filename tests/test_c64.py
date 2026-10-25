@@ -312,6 +312,92 @@ def test_finder_moves_a_probable_start_back_to_the_head_it_branches_into():
     assert end == 0x5959 + len(_WAIT_KEY)
 
 
+def test_finder_starts_a_probable_routine_on_its_instruction_boundary():
+    """A word elsewhere that holds an address inside an instruction made the tail of a routine score higher than its
+    real start (10th Frame's func_0cb0, really $0CAB). A start right after code ends (rts, rti, jmp) scores higher,
+    and a start inside an instruction of the bytes read from there moves back to where they start."""
+    ram = bytearray(0x10000)
+    ram[0x1000:0x1005] = bytes.fromhex("a90185fb60")  # lda #$01 / sta $FB / rts: the program's known code
+    # $1005: pha / ora $C096 / sta $C096 / pla / rts; $100A, the operand of the sta, reads as stx $C0,y / pla / rts
+    ram[0x1005:0x100E] = bytes.fromhex("480d96c08d96c06860")
+    ram[0x3000:0x300C] = bytes.fromhex("0a1009100a1009100a100910")  # $100A and $1009 as words: the tail's evidence
+    starts = {f.start: f for f in c64_find.find(bytes(ram), 0x1000).functions}
+    assert 0x1005 in starts and 0x100A not in starts, sorted(hex(a) for a in starts)
+    assert starts[0x1005].confidence == "probable"
+    # the tail on its own (nothing before it ends as code) is left where it is: there's no boundary to move it to
+    alone = bytearray(ram)
+    alone[0x1000:0x1005] = bytes(5)
+    alone[0x0F00:0x0F05] = bytes.fromhex("a90185fb60")
+    starts = {f.start for f in c64_find.find(bytes(alone), 0x0F00).functions}
+    assert 0x1005 not in starts or 0x100A not in starts, sorted(hex(a) for a in starts)
+
+
+def test_asm_start_notes_say_where_a_routine_cut_mid_instruction_starts():
+    note = c64_asm.start_notes("func_100a", 0x100A, bytes.fromhex("480d96c08d"), bytes.fromhex("96c06860"))
+    assert len(note) == 1 and "`sta $c096` at $1009, which runs over $100A" in note[0], note
+    assert 'delete_function("func_100a"' in note[0] and 'create_function(at="$1005"' in note[0], note
+    assert note[0].index("delete_function") < note[0].index("create_function"), note
+    # on an instruction boundary of those bytes: nothing to say
+    assert c64_asm.start_notes("func_1009", 0x1009, bytes.fromhex("480d96c0"), bytes.fromhex("8d96c06860")) == []
+    # the bytes before it stop (an rts) before reaching it: they aren't its start
+    assert c64_asm.start_notes("func_100a", 0x100A, bytes.fromhex("60ea0d96c0"), bytes.fromhex("96c06860")) == []
+    assert c64_asm.start_notes("func_100a", 0x100A, b"", bytes.fromhex("96c06860")) == []
+
+
+def test_c64_probable_routines_come_last_say_so_and_a_mid_instruction_start_says_how_to_fix_it(tmp_path):
+    """Routines the finder followed to are handed out before the ones it guessed. A guessed one's claim says its start
+    is a guess and to check it; one that starts inside an instruction of the code before it says where it really
+    starts, and delete_function then create_function moves it there."""
+    import time
+    from decompnet.app.engine import RomNetwork
+
+    # $080D: lda #$01 / sta $FB / lda #$02 / sta $FC / rts (the program)
+    # $0816: pha / ora $C096 / sta $C096 / pla / rts (found by guessing)     $081F: $081B and $081A as words
+    code = bytes.fromhex("a90185fba90285fc60" "480d96c08d96c06860" "1b081a081b081a081b081a08")
+    path = tmp_path / "demo.prg"
+    path.write_bytes(_prg(0x0801, _basic(0x0801, 0x080D, code)))
+    net = RomNetwork(tmp_path / "app.db", tmp_path / "work")
+    slug = net.import_rom(path, confirmed=True, log=lambda *_: None)
+    proj = net.project_row(slug)
+    agent, _token = net.local_agent("maxi")
+
+    def row(addr):
+        return net.store.one("SELECT * FROM functions WHERE project_id=? AND vram=?", proj["id"], addr)
+
+    assert json.loads(row(0x080D)["meta"])["c64_found"] == "certain"
+    assert row(0x081B) is None and json.loads(row(0x0816)["meta"])["c64_found"] == "probable"
+    # as an older import had it: cut at $081B, the operand of the sta
+    net.delete_function(agent, slug, row(0x0816)["name"], "test setup: the split as an older finder had it")
+    with net.store.tx() as db:
+        db.execute("DELETE FROM data_regions WHERE project_id=?", (proj["id"],))
+    net.create_function(agent, slug, "$081B", "test setup: the start an older finder picked")
+    guessed = row(0x081B)
+    meta = json.loads(guessed["meta"])
+    meta.update(c64_found="probable", c64_why=["probable (score 5, ends rts)"])
+    with net.store.tx() as db:
+        db.execute("UPDATE functions SET meta=? WHERE id=?", (json.dumps(meta), guessed["id"]))
+        db.execute("DELETE FROM events")
+
+    first = net.claim_asm(agent, slug)
+    assert "/func_080d" in first.splitlines()[0], first.splitlines()[0]  # fewer instructions, but guessed: after
+    assert "### Its start is a guess" not in first and "starts inside an instruction" not in first
+    with net.store.tx() as db:
+        db.execute("UPDATE functions SET status='documented', matched_source=? WHERE id=?",
+                   ("; sets up\nsetup:\n  rts", row(0x080D)["id"]))
+        db.execute("DELETE FROM claims")
+        db.execute("INSERT INTO events(project_id,agent_id,kind,detail,created_at) VALUES(?,?,?,?,?)",
+                   (proj["id"], agent.id, "documented", "func_080d", time.time()))
+    brief = net.claim_asm(agent, slug)
+    assert "/func_081b" in brief.splitlines()[0], brief.splitlines()[0]
+    assert "### Its start is a guess" in brief and "no other routine calls or jumps to this address" in brief, brief
+    assert "### Where the split looks wrong" in brief and "`sta $c096` at $081A, which runs over $081B" in brief, brief
+    assert 'delete_function("func_081b"' in brief and 'create_function(at="$0816"' in brief, brief
+
+    net.delete_function(agent, slug, "func_081b", "starts inside an instruction; the routine starts at $0816")
+    text = net.create_function(agent, slug, "$0816", "the code right after func_080d ends, cut wrongly before")
+    assert "created: func_0816 at $0816, 9 bytes; it ends with `rts` at $081E" in text, text
+
+
 def test_asm_judge_says_where_a_label_has_to_go():
     tail = _WAIT_KEY[12:]
     r = c64_asm.Routine("func_5965", 0x5965, tail, {"w_0060": 0x60}, own={0x5965: "func_5965"},

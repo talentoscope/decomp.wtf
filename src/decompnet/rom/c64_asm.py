@@ -403,6 +403,41 @@ def data_notes(r: Routine) -> list[str]:
     return signs if len(signs) >= DATA_SIGNS else []
 
 
+def start_notes(name: str, cpu: int, before: bytes, code: bytes) -> list[str]:
+    """Whether a routine found by guessing starts inside an instruction. ``before``: the bytes between the end of the
+    routine before it and ``cpu``. Read as instructions from just after that routine, they run straight over ``cpu``
+    (no brk, rts, rti or jmp before it, and no byte that is no instruction) and on to an rts, rti or jmp: then that is
+    where the routine starts, and the split cut it a few bytes in."""
+    if not before:
+        return []
+    g, data = cpu - len(before), before + code
+    off, over = 0, None
+    while off < len(data):
+        text, n = mos6502.decode(data[off:off + 3], g + off)
+        if text.startswith("db") or text.split()[0] in ("brk", "rts", "rti", "jmp") and g + off < cpu:
+            return []
+        if g + off < cpu < g + off + n:
+            over = (g + off, text)
+        off += n
+        if g + off == cpu:
+            return []  # lands on it: the start is an instruction boundary of those bytes
+        if g + off > cpu and mos6502.flow(text)[0] in ("ret", "jump"):
+            break
+    else:
+        return []
+    if over is None:
+        return []
+    at, text = over
+    return [f"It starts inside an instruction. Read from ${g:04X}, right after the routine before it ends, the bytes "
+            f"are `{text}` at ${at:04X}, which runs over ${cpu:04X}, and they go on as code from there. So the routine "
+            f"most likely starts at ${g:04X} and the split cut it {cpu - g} byte{'s' if cpu - g != 1 else ''} in: "
+            f"what you see here is the tail of another instruction read as code. Check with read_data at ${g:04X}; if "
+            f"it reads as a routine, fix the split first: delete_function(\"{name}\", reason=\"starts inside an "
+            f"instruction; the routine starts at ${g:04X}\"), then create_function(at=\"${g:04X}\", reason=...) "
+            "(in that order: create_function stops at the next routine, so this one has to go first). The new routine "
+            "comes to the queue to be documented."]
+
+
 def _operand_checks(r: Routine, rows, got: bytes, shifted: bytes, hw_shifted: bytes) -> list[str]:
     out = []
     data = [(lo - r.flat, lo - r.flat + n) for lo, n, _k in r.data]

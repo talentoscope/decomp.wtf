@@ -2943,7 +2943,8 @@ class RomNetwork(Network):
     def _c64_bottom_up(self, db, proj, agent: Agent, cands: list) -> list:
         """C64 routines in the order to document them: those whose callees are all documented (or set aside) first, so
         leaves come before their callers; among them a caller of the routine this agent just documented (walking back
-        up its call chain), then the smallest. Call loops leave none ready: then the fewest undocumented callees."""
+        up its call chain), then the smallest. Routines the function finder followed to come before the ones it
+        guessed (probable): those are the program's known code, and nothing known calls a guessed one. Call loops leave none ready: then the fewest undocumented callees."""
         rows = db.execute("SELECT * FROM functions WHERE project_id=?", (proj["id"],)).fetchall()
         calls = self._c64_calls(proj, rows)
         pending = {r["id"] for r in rows if self.asm_track(r)}
@@ -2955,7 +2956,8 @@ class RomNetwork(Network):
 
         def key(r):
             todo = len(calls.get(r["id"], set()) & pending)
-            return (r["abandons"] >= GIVEN_UP, r["name"] in released, todo > 0, todo,
+            guessed = json.loads(r["meta"] or "{}").get("c64_found") == "probable"  # certain ones first
+            return (r["abandons"] >= GIVEN_UP, r["name"] in released, guessed, todo > 0, todo,
                     last_id not in calls.get(r["id"], set()), r["n_insns"] or 0, r["rom_offset"] or 0)
 
         return sorted(cands, key=key)
@@ -3047,6 +3049,17 @@ class RomNetwork(Network):
                       "```asm", (fn["matched_source"] or "").strip(), "```"]
             return "\n".join(lines)
         why = _set_aside(fn["meta"]).get("why") or ""
+        meta = json.loads(fn["meta"] or "{}")
+        if c64 and meta.get("c64_found") == "probable":
+            nobody = not self._c64_seen(proj, fn)["callers"]
+            lines += ["", "### Its start is a guess",
+                      "The function finder didn't follow a call or jump here: it scanned bytes nothing else explained "
+                      f"and these read like a routine ({meta.get('c64_why') or 'probable'})"
+                      + (", and no other routine calls or jumps to this address" if nobody else "") + ". Before you "
+                      "document it, check that a routine really starts here: that the start isn't the middle of an "
+                      "instruction (read_data a few bytes before it, from where the code before it ends) and that the "
+                      "bytes aren't data. If the start is wrong, fix the split (delete_function, create_function, "
+                      "merge_function); if it's data, delete_function; if you can't tell, flag_for_review."]
         lines += ["", f"Hand-written: no C compiles to it ({why}). Document it instead: {assembler} assembly that "
                       "rebuilds its bytes, with names, comments and constants instead of addresses (guide topic `asm`)."]
         lines += ["", "### The routine as the split has it", "```asm", self._asm_text(fn, proj).strip(), "```"]
@@ -3055,7 +3068,10 @@ class RomNetwork(Network):
                       *called]
         routine = self._routine(proj, fn)
         inside = [f"- {r[2]} at ${routine.cpu + max(0, r[0] - routine.flat):04X}, {r[1]} bytes" for r in routine.data]
-        if c64 and (gaps := judge.gap_notes(routine)):
+        gaps = judge.gap_notes(routine) if c64 else []
+        if c64 and meta.get("c64_found") != "certain":
+            gaps = self._c64_start_notes(proj, fn) + gaps
+        if gaps:
             lines += ["", "### Where the split looks wrong", *[f"- {g}" for g in gaps]]
         if c64 and (signs := judge.data_notes(routine)):
             lines += ["", "### This may be data, not code",
@@ -3147,6 +3163,28 @@ class RomNetwork(Network):
             if lo is not None and hi is not None and hi - lo <= self.CREATE_LONGEST and (lo, hi) not in out:
                 out.append((lo, hi))
         return out
+
+    def _c64_start_notes(self, proj, fn, limit: int = 64) -> list[str]:
+        """c64_asm.start_notes for a routine the finder didn't follow to: whether it starts inside an instruction of the
+        bytes right after the routine before it (within ``limit`` bytes, with no data between)."""
+        from ..rom import c64_asm
+
+        cpu = fn["vram"]
+        if cpu is None:
+            return []
+        prev = max((r["vram"] + (r["size"] or 0) for r in self.store.all(
+            "SELECT vram, size FROM functions WHERE project_id=? AND id<>? AND vram IS NOT NULL", proj["id"], fn["id"])
+            if r["vram"] + (r["size"] or 0) <= cpu), default=None)
+        if prev is None or not 0 < cpu - prev <= limit:
+            return []
+        shift = (fn["rom_offset"] or 0) - cpu
+        if self.store.one("SELECT 1 FROM data_regions WHERE project_id=? AND rom_offset<? AND rom_offset+size>?",
+                          proj["id"], cpu + shift, prev + shift):
+            return []  # known data in between: not code that runs on into this one
+        before = self.reader(proj)(prev, cpu - prev) or b""
+        if len(before) != cpu - prev:
+            return []
+        return c64_asm.start_notes(fn["name"], cpu, before, bytes(fn["target"] or b""))
 
     def _c64_seen(self, proj, fn) -> dict:
         """How the rest of a C64 program sees a routine, for c64_asm.data_notes: how many calls, jumps and branches in

@@ -9,8 +9,11 @@
 3. probable: every byte no code claims yet is tried as the start of a routine and scored. It scores higher for
    ending in rts/rti, touching hardware, calling the KERNAL or a certain function, being an address the code
    builds, and appearing as a word elsewhere. It scores lower for branching into the middle of known
-   instructions, calling outside RAM, or being mostly $00/$FF. This layer is deliberately generous: a decompiling
-   agent can mark a probable function as not real code.
+   instructions, calling outside RAM, or being mostly $00/$FF. A start right after other code ends (an rts, rti or
+   jmp) scores higher too: code usually follows code. And a start that falls inside an instruction of the bytes
+   read from just after that code, when those bytes read as a routine too, moves back to where they start (a word
+   elsewhere that happens to hold its address is the usual reason the wrong one scored higher). This layer is
+   deliberately generous: a decompiling agent can mark a probable function as not real code.
 4. coverage: how many bytes are certain code, probable code, BASIC, or still unexplained.
 
 The BASIC program is left out of every layer: it is BASIC's, and only the BASIC decoder reads it.
@@ -252,21 +255,28 @@ class Finder:
             if self.code.get(a) or not self.runs(a):
                 continue
             got = self._score(a)
-            if got is not None and got[0] >= min_score:
-                cands.append((got[0], a, got[1], got[2]))
+            if got is None or got[0] < min_score:
+                continue
+            moved = ""
+            if (g := self.aligned_start(a)) is not None and (head := self._score(g)) is not None:
+                # inside an instruction of the bytes that follow the code before it, and those read as a routine:
+                # that reading is the real one (the guess's evidence, say a word that holds its address, still counts)
+                moved = f"; start moved back from ${a:04X}, which is inside an instruction of the code from ${g:04X}"
+                a, got = g, (max(got[0], head[0]), head[1], head[2])
+            cands.append((got[0], a, got[1], got[2], moved))
         cands.sort(key=lambda c: (-c[0], c[1]))
         taken: set[int] = set()
         accepted = []
-        for score, a, size, end in cands:
+        for score, a, size, end, moved in cands:
             span = set(range(a, a + size))
             if span & taken:
                 continue
             taken |= span
-            accepted.append((score, a, end))
-        scores = {a: score for score, a, _end in accepted}
+            accepted.append((score, a, end, moved))
+        scores = {a: score for score, a, _end, _moved in accepted}
         self.held = []
-        for score, a, end in accepted:
-            self.add(a, f"probable (score {score}, ends {end})", "probable")
+        for score, a, end, moved in accepted:
+            self.add(a, f"probable (score {score}, ends {end}{moved})", "probable")
         for _round in range(50):
             self.run()
             waiting, self.held = self.held, []
@@ -316,6 +326,31 @@ class Finder:
             moved += 1
         return moved
 
+    def after_code(self, a: int) -> bool:
+        """Whether known code ends right before ``a`` with an rts, rti or jmp: the next byte is where code would go."""
+        p = a - 1
+        if p in self.starts and self.code.get(p) and self.ram[p] in (0x60, 0x40):  # rts, rti
+            return True
+        p = a - 3
+        return p >= 0 and p in self.starts and bool(self.code.get(p)) and self.ram[p] in (0x4C, 0x6C)  # jmp
+
+    def aligned_start(self, a: int, limit: int = 64) -> int | None:
+        """Where the routine really starts when ``a`` is inside one of its instructions: the bytes from just after
+        the code before ``a`` (an rts, rti or jmp, within ``limit`` bytes) read as instructions straight over ``a``,
+        without stopping. None when ``a`` is on an instruction boundary of those bytes, or there's no such code."""
+        g = a
+        while g > 0x200 and a - g < limit and not self.code.get(g - 1) and self.runs(g - 1):
+            g -= 1
+        if g == a or not self.after_code(g):
+            return None
+        pc = g
+        while pc < a:
+            d = self.dec(pc)
+            if not d or d[0] in ("brk", "rts", "rti", "jmp"):
+                return None
+            pc += d[2]
+        return g if pc != a else None
+
     def _score(self, a: int) -> tuple[int, int, str] | None:
         """(score, size, how it ends) for a run of bytes at ``a`` read as a routine, or None when it doesn't read as one."""
         words, built, certain = self._words, self._built, self._certain
@@ -352,6 +387,7 @@ class Finder:
         score -= 3 * bad
         score -= 3 if zeros * 3 > size else 0
         score += 1 if insns >= 8 else 0
+        score += 3 if self.after_code(a) else 0  # code usually follows code
         return score, size, end
 
     # ------------------------------------------------------------ layer 4
